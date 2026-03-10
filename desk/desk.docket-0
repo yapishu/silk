@@ -2,9 +2,9 @@
     info+'Private marketplace'
     color+0x1a.1a2e
     version+[0 1 0]
-    image+'https://pub-5eef062339ec4a0a8839cb95ec1a98a6.r2.dev/silk.png'
-    website+'https://github.com/yapishu/silk'
+    image+''
+    website+''
     license+'MIT'
     base+'silk'
-    glob-http+['https://pub-5eef062339ec4a0a8839cb95ec1a98a6.r2.dev/glob-0vdpr4.otulu.3j24p.4jmia.2t11u.glob' 0vdpr4.otulu.3j24p.4jmia.2t11u]
+    glob-ames+[~fen 0v0]
 ==
