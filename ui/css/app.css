@@ -365,6 +365,7 @@ tr:hover td {
 .badge-disputed   { background: var(--accent-dim); color: var(--accent); }
 .badge-resolved   { background: var(--text-muted); color: var(--text-dim); background: rgba(100,100,140,0.15); }
 .badge-cancelled  { background: rgba(100,100,140,0.1); color: var(--text-muted); }
+.badge-mine       { background: var(--green-dim); color: var(--green); margin-left: 8px; }
 
 /* ============================================
    buttons
@@ -634,7 +635,7 @@ tr:hover td {
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 20px 0;
+  padding: 24px 0 44px 20px;
   overflow-x: auto;
 }
 
@@ -673,7 +674,7 @@ tr:hover td {
 }
 
 .timeline-line {
-  width: 32px;
+  width: 64px;
   height: 2px;
   background: var(--border-dim);
   flex-shrink: 0;
@@ -815,6 +816,74 @@ tr:hover td {
   border-top: 1px solid var(--border-dim);
   display: flex;
   gap: 8px;
+}
+
+/* ============================================
+   settings row
+   ============================================ */
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.setting-info {
+  flex: 1;
+}
+
+.setting-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.setting-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-bright);
+  min-width: 28px;
+  text-align: center;
+}
+
+.setting-control .btn[disabled] {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ============================================
+   alerts
+   ============================================ */
+
+.alert {
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.alert-warn {
+  background: var(--amber-dim);
+  border: 1px solid var(--amber);
+  color: var(--amber);
 }
 
 /* ============================================

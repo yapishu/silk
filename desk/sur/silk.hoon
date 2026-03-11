@@ -64,6 +64,9 @@
       [%attest attestation]
       [%ping thread-id=@uv]
       [%pong thread-id=@uv]
+      ::  marketplace gossip
+      [%catalog-request from-ship=@p]
+      [%catalog listings=(list listing) routes=(list nym-route)]
   ==
 ::
 ::  listing: a storefront advertisement
@@ -203,6 +206,10 @@
       ::  listing management
       [%post-listing =listing]
       [%retract-listing id=listing-id]
+      ::  marketplace peers
+      [%add-peer ship=@p]
+      [%drop-peer ship=@p]
+      [%sync-catalog ~]
       ::  negotiation
       [%send-offer =offer]
       [%accept-offer thread-id=@uv offer-id=offer-id]
@@ -228,6 +235,9 @@
       [%thread-updated id=thread-id =thread-status]
       [%message-received thread-id=@uv =silk-message]
       [%attestation-received =attestation]
+      [%peer-added ship=@p]
+      [%peer-removed ship=@p]
+      [%catalog-received count=@ud]
   ==
 ::
 ::  destination: how to reach a pseudonym over skein

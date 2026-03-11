@@ -16,7 +16,17 @@
       next-seq=@ud
   ==
 ::
-+$  current-state  state-0
++$  state-1
+  $:  %1
+      nyms=(map nym-id pseudonym)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      routes=(map nym-id nym-route)
+      peers=(set @p)
+      next-seq=@ud
+  ==
+::
++$  current-state  state-1
 +$  card  card:agent:gall
 ::
 ++  skein-app  %silk-core
@@ -31,6 +41,17 @@
         [~ ~ ~]
     ==
   [%pass /silk/send %agent [our %skein] %poke %skein-send !>(req)]
+::
+++  gossip-card
+  |=  [our=ship target-ship=@p msg=silk-message]
+  ^-  card
+  =/  req
+    :*  skein-app
+        [target-ship %silk-core]
+        (jam msg)
+        [~ ~ ~]
+    ==
+  [%pass /silk/gossip %agent [our %skein] %poke %skein-send !>(req)]
 ::
 ++  event-card
   |=  ev=silk-event
@@ -63,6 +84,7 @@
   ^-  (quip card _this)
   :_  this
   :~  [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
+      [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
       [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
   ==
 ::
@@ -72,9 +94,23 @@
 ++  on-load
   |=  old=vase
   ^-  (quip card _this)
-  =.  state  !<(current-state old)
+  =/  new  (mule |.(!<(current-state old)))
+  ?:  ?=(%& -.new)
+    =.  state  p.new
+    :_  this
+    :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
+        [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
+        [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
+    ==
+  =/  old-try  (mule |.(!<(state-0 old)))
+  =.  state
+    ?:  ?=(%& -.old-try)
+      [%1 nyms.p.old-try listings.p.old-try threads.p.old-try routes.p.old-try ~ next-seq.p.old-try]
+    [%1 ~ ~ ~ ~ ~ 1]
   :_  this
   :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
+      [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
+      [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
   ==
 ::
 ++  on-poke
@@ -92,11 +128,100 @@
     (handle-command cmd)
   ::
       %noun
-    ::  handle inbound skein delivery (opaque payload -> silk-message)
-    =/  raw=@  !<(@ vase)
+    =/  raw  q.vase
+    ::  channel peer notifications from skein
+    ?:  ?=([%channel-join @ @] raw)
+      =/  [* channel=@tas ship=@p]  raw
+      ?:  =(ship our.bowl)  `this
+      ?:  (~(has in peers.state) ship)  `this
+      ~&  [%silk-channel %peer-join channel ship]
+      =.  peers.state  (~(put in peers.state) ship)
+      ~&  [%silk-channel %peer-saved ship %total ~(wyt in peers.state)]
+      =/  our-listings=(list listing)  ~(val by listings.state)
+      =/  our-routes=(list nym-route)
+        %+  turn  ~(val by nyms.state)
+        |=(n=pseudonym [id.n our.bowl %silk-core])
+      :_  this
+      :~  (event-card [%peer-added ship])
+          (gossip-card our.bowl ship [%catalog our-listings our-routes])
+      ==
+    ?:  ?=([%channel-members @ *] raw)
+      =/  [* channel=@tas ships=*]  raw
+      =/  peer-list  (mule |.(((list @p) ships)))
+      ?.  ?=(%& -.peer-list)  `this
+      =/  peers=(list @p)  p.peer-list
+      ~&  [%silk-channel %members channel (lent peers) %ships peers]
+      =/  new-peers=(list @p)
+        %+  murn  peers
+        |=(p=@p ?:(|(=(p our.bowl) (~(has in peers.state) p)) ~ `p))
+      =.  peers.state
+        |-
+        ?~  new-peers  peers.state
+        $(new-peers t.new-peers, peers.state (~(put in peers.state) i.new-peers))
+      =/  peer-cards=(list card)
+        (turn new-peers |=(p=@p (event-card [%peer-added p])))
+      =/  catalog-cards=(list card)
+        =/  our-listings=(list listing)  ~(val by listings.state)
+        =/  our-routes=(list nym-route)
+          %+  turn  ~(val by nyms.state)
+          |=(n=pseudonym [id.n our.bowl %silk-core])
+        (turn new-peers |=(p=@p (gossip-card our.bowl p [%catalog our-listings our-routes])))
+      [(weld peer-cards catalog-cards) this]
+    ?:  ?=([%channel-leave @ @] raw)
+      =/  [* channel=@tas ship=@p]  raw
+      ~&  [%silk-channel %peer-leave channel ship]
+      `this
+    ::  inbound skein delivery (opaque payload -> silk-message)
+    ?.  ?=(@ raw)
+      ~&  [%silk-core %noun-not-atom]
+      `this
     =/  parsed  (mule |.((silk-message (cue raw))))
-    ?:  ?=(%| -.parsed)  `this
+    ?:  ?=(%| -.parsed)
+      ~&  [%silk-core %noun-parse-fail]
+      `this
     =/  msg=silk-message  p.parsed
+    ::  gossip messages
+    ?:  ?=(%listing -.msg)
+      ~&  [%silk-gossip %listing-received id.+.msg]
+      ?:  (~(has by listings.state) id.+.msg)  `this
+      =.  listings.state  (~(put by listings.state) id.+.msg +.msg)
+      :-  [(event-card [%listing-posted +.msg])]~
+      this
+    ?:  ?=(%catalog-request -.msg)
+      ~&  [%silk-gossip %catalog-request-from from-ship.msg]
+      =/  ship=@p  from-ship.msg
+      ?:  =(ship our.bowl)  `this
+      ::  auto-peer: add requester so future listings push to them
+      =/  new-peer=?  !(~(has in peers.state) ship)
+      =.  peers.state  (~(put in peers.state) ship)
+      =/  our-listings=(list listing)  ~(val by listings.state)
+      =/  our-routes=(list nym-route)
+        %+  turn  ~(val by nyms.state)
+        |=(n=pseudonym [id.n our.bowl %silk-core])
+      ~&  [%silk-gossip %sending-catalog (lent our-listings) %listings-to ship]
+      :_  this
+      %+  weld
+        [(gossip-card our.bowl ship [%catalog our-listings our-routes])]~
+      ?:(new-peer [(event-card [%peer-added ship])]~ ~)
+    ?:  ?=(%catalog -.msg)
+      =/  new-count=@ud  0
+      =.  listings.state
+        =/  lsts=(list listing)  listings.msg
+        |-
+        ?~  lsts  listings.state
+        ?:  (~(has by listings.state) id.i.lsts)
+          $(lsts t.lsts)
+        ~&  [%silk-gossip %new-listing id.i.lsts title.i.lsts]
+        $(lsts t.lsts, listings.state (~(put by listings.state) id.i.lsts i.lsts))
+      =.  routes.state
+        =/  rtes=(list nym-route)  routes.msg
+        |-
+        ?~  rtes  routes.state
+        $(rtes t.rtes, routes.state (~(put by routes.state) nym-id.i.rtes i.rtes))
+      ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent routes.msg) %routes]
+      :-  [(event-card [%catalog-received (lent listings.msg)])]~
+      this
+    ::  thread-routed messages
     =/  tid=thread-id
       ?+  -.msg  (sham raw)
         %offer          thread-id.msg
@@ -113,10 +238,35 @@
       ==
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
-      :-  [(event-card [%message-received tid msg])]~
+      ::  create thread on first contact (e.g. seller receives offer)
+      ?.  ?=(%offer -.msg)
+        :-  [(event-card [%message-received tid msg])]~
+        this
+      =/  o=offer  +.msg
+      =/  new-thd=silk-thread
+        [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] now.bowl now.bowl]
+      =.  threads.state  (~(put by threads.state) tid new-thd)
+      :-  :~  (event-card [%thread-opened new-thd])
+              (event-card [%message-received tid msg])
+          ==
       this
+    ::  update thread status based on inbound message type
+    =/  new-status=thread-status
+      ?:  ?=(%accept -.msg)
+        %accepted
+      ?:  ?=(%reject -.msg)
+        %cancelled
+      ?:  ?=(%payment-proof -.msg)
+        %paid
+      ?:  ?=(%fulfill -.msg)
+        %fulfilled
+      ?:  ?=(%dispute -.msg)
+        %disputed
+      ?:  ?=(%verdict -.msg)
+        %resolved
+      thread-status.u.thd
     =/  updated=silk-thread
-      u.thd(messages [msg messages.u.thd], updated-at now.bowl)
+      u.thd(thread-status new-status, messages [msg messages.u.thd], updated-at now.bowl)
     =.  threads.state  (~(put by threads.state) tid updated)
     :-  [(event-card [%message-received tid msg])]~
     this
@@ -169,15 +319,52 @@
       :~  ['threads' [%a (turn ~(val by threads.state) thread-to-json)]]
       ==
     ::
-        [%orders ~]
-      ::  TODO: scry silk-market when integrated
+        [%peers ~]
       %-  give-json  :-  eyre-id
       %-  pairs:enjs:format
-      :~  ['orders' [%a ~]]
+      :~  ['peers' [%a (turn ~(tap in peers.state) |=(s=@p s+(scot %p s)))]]
+      ==
+    ::
+        [%orders ~]
+      =/  order-threads=(list silk-thread)
+        %+  murn  ~(val by threads.state)
+        |=  t=silk-thread
+        ?.  ?=(?(%accepted %paid %fulfilled %completed %disputed %resolved) thread-status.t)
+          ~
+        `t
+      %-  give-json  :-  eyre-id
+      %-  pairs:enjs:format
+      :~  :-  'orders'
+          :-  %a
+          %+  turn  order-threads
+          |=  t=silk-thread
+          =/  offer-data=[amount=@ud cur=@tas]
+            =/  msgs=(list silk-message)  messages.t
+            |-
+            ?~  msgs  [0 %$]
+            ?:  ?=(%offer -.i.msgs)  [amount.+.i.msgs currency.+.i.msgs]
+            $(msgs t.msgs)
+          =/  invoice-info=[has=? pa=@t]
+            =/  msgs=(list silk-message)  messages.t
+            |-
+            ?~  msgs  [| '']
+            ?:  ?=(%invoice -.i.msgs)  [& pay-address.+.i.msgs]
+            $(msgs t.msgs)
+          %-  pairs:enjs:format
+          :~  ['thread_id' s+(scot %uv id.t)]
+              ['listing_id' s+(scot %uv listing-id.t)]
+              ['buyer' s+(scot %uv buyer.t)]
+              ['seller' s+(scot %uv seller.t)]
+              ['status' s+`@t`thread-status.t]
+              ['amount' (numb:enjs:format amount.offer-data)]
+              ['currency' s+`@t`cur.offer-data]
+              ['has_invoice' b+has.invoice-info]
+              ['pay_address' s+pa.invoice-info]
+              ['updated_at' (numb:enjs:format (div (sub updated-at.t ~1970.1.1) ~s1))]
+          ==
       ==
     ::
         [%reputation ~]
-      ::  TODO: scry silk-rep when integrated
       %-  give-json  :-  eyre-id
       %-  pairs:enjs:format
       :~  ['scores' [%a ~]]
@@ -192,6 +379,7 @@
           ['listings' (numb:enjs:format ~(wyt by listings.state))]
           ['threads' (numb:enjs:format ~(wyt by threads.state))]
           ['routes' (numb:enjs:format ~(wyt by routes.state))]
+          ['peers' (numb:enjs:format ~(wyt in peers.state))]
           ['ship' s+(scot %p our.bowl)]
       ==
     ==
@@ -206,6 +394,23 @@
     ?~  jon
       :_  this
       (give-http eyre-id 400 ~[['content-type' 'application/json']] (some (as-octs:mimes:html '{"error":"bad json"}')))
+    ::  extract action type for routing
+    =/  typ=(unit @t)
+      =/  res  (mule |.(((ot:dejs:format ~[action+so:dejs:format]) u.jon)))
+      ?:(?=(%& -.res) `p.res ~)
+    ?~  typ
+      :_  this
+      (give-http eyre-id 400 ~[['content-type' 'application/json']] (some (as-octs:mimes:html '{"error":"bad action"}')))
+    ::  payment-flow actions (need state access to derive full types)
+    ?:  =(%'send-invoice' u.typ)
+      (handle-api-invoice eyre-id u.jon)
+    ?:  =(%'submit-payment' u.typ)
+      (handle-api-payment eyre-id u.jon)
+    ?:  =(%'mark-fulfilled' u.typ)
+      (handle-api-fulfill eyre-id u.jon)
+    ?:  =(%'confirm-complete' u.typ)
+      (handle-api-complete eyre-id u.jon)
+    ::  existing command flow
     =/  cmd=(unit silk-command)  (parse-action u.jon)
     ?~  cmd
       :_  this
@@ -250,6 +455,17 @@
       =/  id=@t  ((ot ~[id+so]) jon)
       [%retract-listing (slav %uv id)]
     ::
+        %'add-peer'
+      =/  ship=@t  ((ot ~[ship+so]) jon)
+      [%add-peer (slav %p ship)]
+    ::
+        %'drop-peer'
+      =/  ship=@t  ((ot ~[ship+so]) jon)
+      [%drop-peer (slav %p ship)]
+    ::
+        %'sync-catalog'
+      [%sync-catalog ~]
+    ::
         %'send-offer'
       =/  f  (ot ~['listing_id'^so seller+so amount+ni currency+so nym+so])
       =/  [lid=@t seller-t=@t amount=@ud currency=@t nym=@t]  (f jon)
@@ -271,6 +487,126 @@
       =/  [tid=@t oid=@t reason=@t]  (f jon)
       [%reject-offer (slav %uv tid) (slav %uv oid) reason]
     ==
+  ::
+  ::  payment-flow API handlers (derive full types from state)
+  ::
+  ++  ok-response
+    |=  eyre-id=@ta
+    ^-  (list card)
+    (give-http eyre-id 200 ~[['content-type' 'application/json']] (some (as-octs:mimes:html '{"ok":true}')))
+  ::
+  ++  err-response
+    |=  [eyre-id=@ta msg=@t]
+    ^-  (list card)
+    =/  body=@t  (rap 3 '{"error":"' msg '"}' ~)
+    (give-http eyre-id 400 ~[['content-type' 'application/json']] (some (as-octs:mimes:html body)))
+  ::
+  ++  find-offer
+    |=  msgs=(list silk-message)
+    ^-  (unit offer)
+    ?~  msgs  ~
+    ?:  ?=(%offer -.i.msgs)  `+.i.msgs
+    $(msgs t.msgs)
+  ::
+  ++  find-invoice-id
+    |=  msgs=(list silk-message)
+    ^-  (unit invoice-id)
+    ?~  msgs  ~
+    ?:  ?=(%invoice -.i.msgs)  `id.+.i.msgs
+    $(msgs t.msgs)
+  ::
+  ++  handle-api-invoice
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =,  dejs:format
+    =/  f  (ot ~['thread_id'^so 'pay_address'^so])
+    =/  [tid-t=@t pa=@t]  (f jon)
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  off=(unit offer)  (find-offer messages.u.thd)
+    ?~  off
+      :_(this (err-response eyre-id 'no offer in thread'))
+    =/  inv=invoice
+      :*  (sham [our.bowl now.bowl tid])
+          tid
+          id.u.off
+          seller.u.thd
+          amount.u.off
+          currency.u.off
+          pa
+          (add now.bowl ~d7)
+      ==
+    =/  result  (handle-command [%send-invoice inv])
+    :_  +.result
+    %+  weld  -.result
+    (ok-response eyre-id)
+  ::
+  ++  handle-api-payment
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =,  dejs:format
+    =/  f  (ot ~['thread_id'^so 'tx_hash'^so])
+    =/  [tid-t=@t txh-t=@t]  (f jon)
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  inv-id=invoice-id
+      =/  found  (find-invoice-id messages.u.thd)
+      ?~(found (sham tid) u.found)
+    =/  pp=payment-proof
+      :*  tid
+          inv-id
+          `@ux`(sham txh-t)
+          now.bowl
+      ==
+    =/  result  (handle-command [%submit-payment pp])
+    :_  +.result
+    %+  weld  -.result
+    (ok-response eyre-id)
+  ::
+  ++  handle-api-fulfill
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =,  dejs:format
+    =/  f  (ot ~['thread_id'^so note+so])
+    =/  [tid-t=@t note=@t]  (f jon)
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  off=(unit offer)  (find-offer messages.u.thd)
+    =/  oid=offer-id  ?~(off (sham tid) id.u.off)
+    =/  ful=fulfillment
+      :*  tid
+          oid
+          note
+          ~
+          now.bowl
+      ==
+    =/  result  (handle-command [%send-fulfillment ful])
+    :_  +.result
+    %+  weld  -.result
+    (ok-response eyre-id)
+  ::
+  ++  handle-api-complete
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =,  dejs:format
+    =/  tid-t=@t  ((ot ~['thread_id'^so]) jon)
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  updated=silk-thread
+      u.thd(thread-status %completed, updated-at now.bowl)
+    =.  threads.state  (~(put by threads.state) tid updated)
+    :_  this
+    %+  weld
+      [(event-card [%thread-updated tid %completed])]~
+    (ok-response eyre-id)
   ::
   ::  command handler (shared by poke and http post)
   ::
@@ -294,13 +630,46 @@
     ::
         %post-listing
       =.  listings.state  (~(put by listings.state) id.listing.cmd listing.cmd)
-      :-  [(event-card [%listing-posted listing.cmd])]~
+      ::  broadcast listing + seller route to all peers via skein
+      =/  route=nym-route  [seller.listing.cmd our.bowl %silk-core]
+      =/  active-peers=(list @p)
+        %+  murn  ~(tap in peers.state)
+        |=(p=@p ?:(=(p our.bowl) ~ `p))
+      ~&  [%silk-gossip %broadcasting-listing id.listing.cmd %to-peers (lent active-peers)]
+      =/  peer-cards=(list card)
+        (turn active-peers |=(p=@p (gossip-card our.bowl p [%catalog [listing.cmd]~ [route]~])))
+      :-  (weld [(event-card [%listing-posted listing.cmd])]~ peer-cards)
       this
     ::
         %retract-listing
       =.  listings.state  (~(del by listings.state) id.cmd)
       :-  [(event-card [%listing-retracted id.cmd])]~
       this
+    ::
+        %add-peer
+      ?:  =(ship.cmd our.bowl)  `this
+      =.  peers.state  (~(put in peers.state) ship.cmd)
+      =/  our-listings=(list listing)  ~(val by listings.state)
+      =/  our-routes=(list nym-route)
+        %+  turn  ~(val by nyms.state)
+        |=(n=pseudonym [id.n our.bowl %silk-core])
+      ~&  [%silk-gossip %add-peer ship.cmd %sending (lent our-listings) %listings]
+      :_  this
+      :~  (event-card [%peer-added ship.cmd])
+          (gossip-card our.bowl ship.cmd [%catalog our-listings our-routes])
+          (gossip-card our.bowl ship.cmd [%catalog-request our.bowl])
+      ==
+    ::
+        %drop-peer
+      =.  peers.state  (~(del in peers.state) ship.cmd)
+      :-  [(event-card [%peer-removed ship.cmd])]~
+      this
+    ::
+        %sync-catalog
+      ~&  [%silk-sync %peer-count ~(wyt in peers.state) %peers ~(tap in peers.state)]
+      :_  this
+      %+  turn  ~(tap in peers.state)
+      |=(p=@p (gossip-card our.bowl p [%catalog-request our.bowl]))
     ::
         %send-offer
       =/  o=offer  offer.cmd
@@ -432,9 +801,12 @@
   ++  listing-to-json
     |=  l=listing
     ^-  json
+    =/  nym=(unit pseudonym)  (~(get by nyms.state) seller.l)
     %-  pairs:enjs:format
     :~  ['id' s+(scot %uv id.l)]
         ['seller' s+(scot %uv seller.l)]
+        ['seller_label' ?~(nym ~ s+label.u.nym)]
+        ['mine' b+?=(^ nym)]
         ['title' s+title.l]
         ['description' s+description.l]
         ['price' (numb:enjs:format price.l)]
@@ -448,6 +820,9 @@
   ++  thread-to-json
     |=  t=silk-thread
     ^-  json
+    =/  offer-data=[amount=@ud cur=@tas]
+      =/  off  (find-offer messages.t)
+      ?~(off [0 %$] [amount.u.off currency.u.off])
     %-  pairs:enjs:format
     :~  ['id' s+(scot %uv id.t)]
         ['listing_id' s+(scot %uv listing-id.t)]
@@ -455,6 +830,8 @@
         ['seller' s+(scot %uv seller.t)]
         ['status' s+`@t`thread-status.t]
         ['message_count' (numb:enjs:format (lent messages.t))]
+        ['amount' (numb:enjs:format amount.offer-data)]
+        ['currency' s+`@t`cur.offer-data]
         ['started_at' (numb:enjs:format (div (sub started-at.t ~1970.1.1) ~s1))]
         ['updated_at' (numb:enjs:format (div (sub updated-at.t ~1970.1.1) ~s1))]
     ==
@@ -477,12 +854,16 @@
     =/  tid=@uv  (slav %uv i.t.t.path)
     ``noun+!>((~(get by threads.state) tid))
   ::
+      [%x %peers ~]
+    ``noun+!>(peers.state)
+  ::
       [%x %stats ~]
     =/  s
       :*  nyms=~(wyt by nyms.state)
           listings=~(wyt by listings.state)
           threads=~(wyt by threads.state)
           routes=~(wyt by routes.state)
+          peers=~(wyt in peers.state)
       ==
     ``noun+!>(s)
   ==
@@ -504,6 +885,10 @@
   ^-  (quip card _this)
   ?+  wire  (on-agent:def wire sign)
       [%silk *]
+    ?:  ?=(%poke-ack -.sign)
+      ?~  p.sign  `this
+      ~&  [%silk-poke-failed wire]
+      ((slog u.p.sign) `this)
     `this
   ==
 ++  on-arvo
