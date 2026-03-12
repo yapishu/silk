@@ -11,6 +11,7 @@
   $:  id=nym-id
       label=@t
       pubkey=@ux
+      wallet=@t             ::  zenith blockchain address
       created-at=@da
   ==
 ::
@@ -62,11 +63,20 @@
       [%dispute dispute]
       [%verdict verdict]
       [%attest attestation]
+      [%complete thread-id=@uv completed-at=@da]
+      [%direct-message thread-id=@uv listing-id=listing-id sender=nym-id text=@t sent-at=@da]
+      ::  delivery acknowledgment
+      [%ack thread-id=@uv msg-hash=@ux acked-at=@da]
+      ::  thread reconciliation
+      [%sync-thread thread-id=@uv chain=@ux msg-count=@ud]
+      [%sync-thread-response =silk-thread]
+      ::  keepalive
       [%ping thread-id=@uv]
       [%pong thread-id=@uv]
       ::  marketplace gossip
       [%catalog-request from-ship=@p]
       [%catalog listings=(list listing) routes=(list nym-route)]
+      [%listing-retracted id=listing-id]
   ==
 ::
 ::  listing: a storefront advertisement
@@ -130,7 +140,7 @@
 +$  payment-proof
   $:  thread-id=@uv
       invoice-id=invoice-id
-      tx-hash=@ux
+      tx-hash=@t              ::  chain transaction hash (string)
       paid-at=@da
   ==
 ::
@@ -175,6 +185,11 @@
 ::  thread: tracks a negotiation conversation
 ::
 +$  thread-id  @uv
+::  chain: running hash of all state transitions.
+::  each step hashes [prev-chain message-tag] creating a
+::  tamper-evident log.  if either party skips or alters
+::  a step, the chain diverges and reconciliation detects it.
+::
 +$  silk-thread
   $:  id=thread-id
       listing-id=listing-id
@@ -182,6 +197,7 @@
       seller=nym-id
       =thread-status
       messages=(list silk-message)
+      chain=@ux
       started-at=@da
       updated-at=@da
   ==
@@ -201,7 +217,7 @@
 ::
 +$  silk-command
   $%  ::  pseudonym management
-      [%create-nym label=@t]
+      [%create-nym label=@t wallet=@t]
       [%drop-nym id=nym-id]
       ::  listing management
       [%post-listing =listing]

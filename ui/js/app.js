@@ -10,12 +10,15 @@ const App = {
     threads: [],
     orders: [],
     reputation: [],
+    attestations: [],
     peers: [],
     stats: { nyms: 0, listings: 0, threads: 0, orders: 0, peers: 0 },
     relays: [],
     skeinStats: {},
     loading: true,
     dialog: null,
+    threadsPage: 0,
+    ordersPage: 0,
   },
 
   init() {
@@ -48,7 +51,10 @@ const App = {
       if (listings.status === 'fulfilled')    this.state.listings = listings.value.listings || [];
       if (threads.status === 'fulfilled')     this.state.threads = threads.value.threads || [];
       if (orders.status === 'fulfilled')      this.state.orders = orders.value.orders || [];
-      if (reputation.status === 'fulfilled')  this.state.reputation = reputation.value.scores || [];
+      if (reputation.status === 'fulfilled') {
+        this.state.reputation = reputation.value.scores || [];
+        this.state.attestations = reputation.value.attestations || [];
+      }
       if (stats.status === 'fulfilled')       this.state.stats = stats.value;
       if (peers.status === 'fulfilled')       this.state.peers = peers.value.peers || [];
       if (relays.status === 'fulfilled')      this.state.relays = relays.value || [];
@@ -57,7 +63,7 @@ const App = {
       console.error('refresh failed:', e);
     }
     this.state.loading = false;
-    this.render();
+    if (!this.state.dialog) this.render();
   },
 
   toast(msg, type = '') {
@@ -107,9 +113,8 @@ const App = {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   },
 
-  fmtPrice(amount, currency) {
-    const cur = (currency || 'usd').toUpperCase();
-    return `${amount} ${cur}`;
+  fmtPrice(amount) {
+    return `${amount} sZ`;
   },
 
   // ---- render ----
@@ -255,6 +260,7 @@ const App = {
                 <div class="nym-label">${this.esc(n.label)}</div>
                 <div class="nym-id">id: ${n.id}</div>
                 <div class="nym-key">key: ${this.shortId(n.pubkey)}</div>
+                <div class="nym-wallet">${n.wallet ? `wallet: ${n.wallet}` : 'no wallet set'}</div>
                 <div class="nym-date">created ${this.fmtDate(n.created_at)}</div>
                 <div class="nym-actions">
                   <button class="btn btn-sm btn-ghost" data-action="drop-nym" data-id="${n.id}">delete</button>
@@ -287,7 +293,11 @@ const App = {
         </div>
         ${this.state.listings.length ? `
           <div class="listing-grid">
-            ${this.state.listings.map(l => `
+            ${this.state.listings.map(l => {
+              const repStr = l.seller_reviews > 0
+                ? `<span class="listing-rep" title="${l.seller_reviews} reviews">${l.seller_score}/100 (${l.seller_reviews})</span>`
+                : '<span class="listing-rep" style="opacity:0.4">no reviews</span>';
+              return `
               <div class="listing-card">
                 <div class="listing-title">
                   ${this.esc(l.title)}
@@ -299,14 +309,18 @@ const App = {
                   <span class="listing-currency">${l.currency}</span>
                 </div>
                 <div class="listing-meta">
-                  <span class="listing-seller">${l.seller_label ? this.esc(l.seller_label) : this.shortId(l.seller)}</span>
+                  <span class="listing-seller">${l.seller_label ? this.esc(l.seller_label) : this.shortId(l.seller)} ${repStr}</span>
                   ${l.mine
                     ? `<button class="btn btn-sm btn-ghost" data-action="retract-listing" data-id="${l.id}">delete</button>`
-                    : `<button class="btn btn-sm" data-action="open-send-offer" data-listing='${JSON.stringify(l)}'>Make Offer</button>`
+                    : `<div style="display:flex;gap:6px;">
+                        <button class="btn btn-sm btn-ghost" data-action="open-send-message" data-listing='${JSON.stringify(l)}'>Message</button>
+                        <button class="btn btn-sm" data-action="open-send-offer" data-listing='${JSON.stringify(l)}'>Buy</button>
+                      </div>`
                   }
                 </div>
               </div>
-            `).join('')}
+              `;
+            }).join('')}
           </div>
         ` : `
           <div class="empty-state">
@@ -321,18 +335,26 @@ const App = {
   // ---- threads ----
 
   renderThreads() {
+    const myNymIds = new Set(this.state.nyms.map(n => n.id));
+    const PAGE = 10;
+    const page = this.state.threadsPage || 0;
+    const all = this.state.threads;
+    const paged = all.slice(page * PAGE, (page + 1) * PAGE);
+    const totalPages = Math.ceil(all.length / PAGE);
     return `
       <div class="page-header">
         <h2>Threads</h2>
-        <div class="page-desc">Negotiation conversations</div>
+        <div class="page-desc">Negotiation conversations (${all.length})</div>
       </div>
       <div class="page-content">
-        ${this.state.threads.length ? `
+        ${paged.length ? `
           <div class="thread-list">
-            ${this.state.threads.map(t => {
-              // find the listing title if we have it
+            ${paged.map(t => {
               const listing = this.state.listings.find(l => l.id === t.listing_id);
               const title = listing ? this.esc(listing.title) : this.shortId(t.listing_id);
+              const isBuyer = myNymIds.has(t.buyer);
+              const isSeller = myNymIds.has(t.seller);
+              const msgs = t.messages || [];
               return `
               <div class="card" style="margin-bottom: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
@@ -340,27 +362,45 @@ const App = {
                     <div style="font-size: 15px; font-weight: 600; color: var(--text-bright);">${title}</div>
                     <div class="thread-parties" style="margin-top: 4px;">
                       <span class="mono">${this.shortId(t.buyer)}</span>
+                      ${isBuyer ? ' <span class="badge badge-mine" style="font-size:10px;">you</span>' : ''}
                       <span style="color: var(--text-muted); margin: 0 6px;">\u2194</span>
                       <span class="mono">${this.shortId(t.seller)}</span>
+                      ${isSeller ? ' <span class="badge badge-mine" style="font-size:10px;">you</span>' : ''}
                     </div>
                   </div>
                   <span class="badge badge-${t.status}">${t.status}</span>
                 </div>
+                ${msgs.length ? `
+                  <div class="thread-messages">
+                    ${msgs.slice(-6).map(m => this.renderMessage(m, myNymIds)).join('')}
+                  </div>
+                ` : ''}
                 <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid var(--border-dim);">
                   <div style="font-size: 12px; color: var(--text-muted);">
-                    ${t.amount ? this.fmtPrice(t.amount, t.currency) + ' &middot; ' : ''}${t.message_count} message${t.message_count !== 1 ? 's' : ''} &middot; ${this.fmtDate(t.updated_at)}
+                    ${t.amount ? this.fmtPrice(t.amount) + ' &middot; ' : ''}${t.message_count} message${t.message_count !== 1 ? 's' : ''} &middot; ${this.fmtDate(t.updated_at)}
                   </div>
                   <div style="display: flex; gap: 8px;">
-                    ${t.status === 'open' ? `
+                    ${t.status === 'open' && isSeller ? `
                       <button class="btn btn-sm btn-primary" data-action="accept-offer" data-thread-id="${t.id}" data-offer-id="${t.id}">Accept</button>
                       <button class="btn btn-sm btn-ghost" data-action="reject-offer" data-thread-id="${t.id}" data-offer-id="${t.id}">Reject</button>
                     ` : ''}
+                    ${t.status === 'open' && isBuyer ? `
+                      <button class="btn btn-sm btn-ghost" data-action="reject-offer" data-thread-id="${t.id}" data-offer-id="${t.id}">Cancel</button>
+                    ` : ''}
+                    <button class="btn btn-sm" data-action="open-send-reply" data-thread-id="${t.id}">Reply</button>
                   </div>
                 </div>
               </div>
               `;
             }).join('')}
           </div>
+        ${totalPages > 1 ? `
+          <div class="pagination">
+            <button class="btn btn-sm" data-action="threads-prev" ${page === 0 ? 'disabled' : ''}>\u2190 Prev</button>
+            <span class="page-info">${page + 1} / ${totalPages}</span>
+            <button class="btn btn-sm" data-action="threads-next" ${page >= totalPages - 1 ? 'disabled' : ''}>Next \u2192</button>
+          </div>
+        ` : ''}
         ` : `
           <div class="empty-state">
             <div class="empty-icon">\u2261</div>
@@ -371,58 +411,146 @@ const App = {
     `;
   },
 
+  renderMessage(m, myNymIds) {
+    const isMine = m.sender && myNymIds.has(m.sender);
+    // for non-DM messages, infer direction from type: buyer-initiated vs seller-initiated
+    const buyerActions = new Set(['offer', 'payment-proof', 'complete']);
+    const sellerActions = new Set(['accept', 'reject', 'invoice', 'fulfill']);
+    let direction = '';
+    if (m.type === 'direct-message') {
+      direction = isMine ? 'sent' : 'received';
+    } else if (buyerActions.has(m.type) || sellerActions.has(m.type)) {
+      // determine if we're likely the actor
+      direction = (buyerActions.has(m.type) && [...myNymIds].some(id => m.buyer === id))
+        || (sellerActions.has(m.type) && [...myNymIds].some(id => m.seller === id))
+        ? 'sent' : 'received';
+    }
+    const typeLabels = {
+      'offer': 'Offer',
+      'accept': 'Accepted',
+      'reject': 'Rejected',
+      'invoice': 'Invoice',
+      'payment-proof': 'Payment',
+      'fulfill': 'Fulfilled',
+      'complete': 'Complete',
+      'direct-message': direction === 'sent' ? 'Sent' : 'Received',
+      'dispute': 'Dispute',
+      'verdict': 'Verdict',
+      'attest': 'Feedback',
+    };
+    const label = typeLabels[m.type] || m.type;
+    let detail = '';
+    if (m.type === 'offer') detail = `${m.amount} sZ${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
+    else if (m.type === 'invoice') detail = `${m.amount} sZ \u2192 ${this.esc(m.pay_address)}`;
+    else if (m.type === 'payment-proof') detail = `tx: ${this.esc(m.tx_hash)}`;
+    else if (m.type === 'fulfill' && m.note) detail = this.esc(m.note);
+    else if (m.type === 'direct-message') detail = this.esc(m.text);
+    else if (m.type === 'reject' && m.reason) detail = this.esc(m.reason);
+    else if (m.type === 'dispute' && m.reason) detail = this.esc(m.reason);
+    else if (m.type === 'attest') detail = `${m.score}/100${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
+
+    const dirIcon = direction === 'sent' ? '\u2191 ' : direction === 'received' ? '\u2193 ' : '';
+    return `
+      <div class="msg-row ${direction === 'sent' ? 'msg-mine' : ''}">
+        <span class="msg-type badge badge-${m.type === 'direct-message' ? 'open' : m.type}">${dirIcon}${label}</span>
+        <span class="msg-detail">${detail}</span>
+      </div>
+    `;
+  },
+
   // ---- orders ----
 
+  orderStep(o) {
+    // virtual 5-step: accepted → invoiced → paid → fulfilled → completed
+    if (o.status === 'completed') return 4;
+    if (o.status === 'fulfilled') return 3;
+    if (o.status === 'paid') return 2;
+    if (o.status === 'accepted' && o.has_invoice) return 1;
+    return 0; // accepted, no invoice yet
+  },
+
+  orderAction(o, role) {
+    // exactly one party acts per state, the other waits
+    const tid = o.thread_id;
+    const s = o.status;
+    const inv = o.has_invoice;
+
+    if (s === 'accepted' && !inv) {
+      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-send-invoice" data-thread-id="${tid}">Send Invoice</button>`, wait: '' };
+      return { btn: '', wait: 'Waiting for seller to send invoice' };
+    }
+    if (s === 'accepted' && inv) {
+      if (role === 'buyer') return {
+        btn: `<button class="btn btn-sm btn-primary" data-action="open-submit-payment" data-thread-id="${tid}">Submit Payment</button>`,
+        wait: o.pay_address ? `Pay to: <span class="mono">${this.esc(o.pay_address)}</span>` : '',
+      };
+      return { btn: '', wait: 'Invoice sent \u2014 waiting for payment' };
+    }
+    if (s === 'paid') {
+      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>`, wait: '' };
+      return { btn: '', wait: 'Payment submitted \u2014 waiting for delivery' };
+    }
+    if (s === 'fulfilled') {
+      if (role === 'buyer') return {
+        btn: `<button class="btn btn-sm btn-primary" data-action="confirm-complete" data-thread-id="${tid}">Confirm Receipt</button>`,
+        wait: '',
+      };
+      return { btn: '', wait: 'Delivered \u2014 waiting for buyer confirmation' };
+    }
+    if (s === 'completed') return {
+      btn: `<button class="btn btn-sm" data-action="open-leave-feedback" data-thread-id="${tid}">Leave Feedback</button>`,
+      wait: 'Order complete',
+    };
+    if (s === 'disputed') return { btn: '', wait: 'Dispute in progress' };
+    if (s === 'cancelled') return { btn: '', wait: 'Cancelled' };
+    return { btn: '', wait: '' };
+  },
+
   renderOrders() {
-    const ORDER_STEPS = ['accepted','paid','fulfilled','completed'];
+    const STEPS = ['accepted','invoiced','paid','fulfilled','completed'];
     const myNymIds = new Set(this.state.nyms.map(n => n.id));
+    const PAGE = 10;
+    const page = this.state.ordersPage || 0;
+    const all = this.state.orders;
+    const paged = all.slice(page * PAGE, (page + 1) * PAGE);
+    const totalPages = Math.ceil(all.length / PAGE);
     return `
       <div class="page-header">
         <h2>Orders</h2>
-        <div class="page-desc">Track order status through the lifecycle</div>
+        <div class="page-desc">Track order lifecycle (${all.length})</div>
       </div>
       <div class="page-content">
-        ${this.state.orders.length ? `
+        ${paged.length ? `
           <div style="display: flex; flex-direction: column; gap: 16px;">
-            ${this.state.orders.map(o => {
-              const idx = ORDER_STEPS.indexOf(o.status);
+            ${paged.map(o => {
               const isBuyer = myNymIds.has(o.buyer);
               const isSeller = myNymIds.has(o.seller);
+              const role = isBuyer ? 'buyer' : isSeller ? 'seller' : 'observer';
               const listing = this.state.listings.find(l => l.id === o.listing_id);
               const title = listing ? this.esc(listing.title) : this.shortId(o.listing_id);
-
-              let actions = '';
-              if (o.status === 'accepted') {
-                actions += `<button class="btn btn-sm btn-primary" data-action="open-send-invoice" data-thread-id="${o.thread_id}">Send Invoice</button>`;
-                actions += `<button class="btn btn-sm" data-action="open-submit-payment" data-thread-id="${o.thread_id}">Submit Payment</button>`;
-              }
-              if (o.status === 'paid') {
-                actions += `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${o.thread_id}">Mark Fulfilled</button>`;
-              }
-              if (o.status === 'fulfilled') {
-                actions += `<button class="btn btn-sm btn-primary" data-action="confirm-complete" data-thread-id="${o.thread_id}">Confirm Complete</button>`;
-              }
+              const stepIdx = this.orderStep(o);
+              const { btn, wait } = this.orderAction(o, role);
 
               return `
                 <div class="card">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                     <div>
                       <div style="font-size: 15px; font-weight: 600; color: var(--text-bright);">
-                        ${title} &mdash; ${this.fmtPrice(o.amount, o.currency)}
+                        ${title} &mdash; ${this.fmtPrice(o.amount)}
                       </div>
-                      <div class="mono" style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                        ${isBuyer ? 'you are buyer' : isSeller ? 'you are seller' : this.shortId(o.thread_id)}
+                      <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                        ${role === 'buyer' ? 'You are the buyer' : role === 'seller' ? 'You are the seller' : this.shortId(o.thread_id)}
                       </div>
                     </div>
-                    <span class="badge badge-${o.status}">${o.status}</span>
+                    <span class="badge badge-${o.status}">${o.status}${o.status === 'accepted' && o.has_invoice ? ' (invoiced)' : ''}</span>
                   </div>
                   <div class="order-timeline">
-                    ${ORDER_STEPS.map((step, i) => {
-                      const reached = i <= idx;
-                      const current = i === idx;
+                    ${STEPS.map((step, i) => {
+                      const reached = i <= stepIdx;
+                      const current = i === stepIdx;
                       const dot = current ? 'current' : reached ? 'reached' : '';
-                      const line = i < ORDER_STEPS.length - 1
-                        ? `<div class="timeline-line ${i < idx ? 'reached' : ''}"></div>`
+                      const line = i < STEPS.length - 1
+                        ? `<div class="timeline-line ${i < stepIdx ? 'reached' : ''}"></div>`
                         : '';
                       return `
                         <div class="timeline-step">
@@ -435,19 +563,37 @@ const App = {
                       `;
                     }).join('')}
                   </div>
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 28px;">
-                    <div style="display: flex; gap: 16px; font-size: 12px; color: var(--text-muted);">
-                      <span>buyer: <span class="mono">${this.shortId(o.buyer)}</span></span>
-                      <span>seller: <span class="mono">${this.shortId(o.seller)}</span></span>
+                  ${(o.messages && o.messages.length) ? `
+                    <div class="thread-messages" style="margin-top: 12px;">
+                      ${o.messages.map(m => this.renderMessage(m, myNymIds)).join('')}
+                    </div>
+                  ` : ''}
+                  ${o.seller_wallet ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Seller wallet: <span class="mono">${o.seller_wallet}</span></div>` : ''}
+                  ${o.verification ? `
+                    <div style="margin-top: 8px; padding: 8px; border-radius: var(--radius); font-size: 12px; background: ${o.verification.verified ? 'rgba(76,175,80,0.1)' : 'rgba(233,69,96,0.1)'}; border: 1px solid ${o.verification.verified ? 'rgba(76,175,80,0.3)' : 'rgba(233,69,96,0.3)'};">
+                      ${o.verification.verified ? '\u2713 Payment verified' : '\u2717 Payment NOT verified'} &mdash; Seller balance: ${o.verification.balance} sZ (checked ${this.fmtDate(o.verification.checked_at)})
+                    </div>
+                  ` : ''}
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; min-height: 32px;">
+                    <div style="font-size: 12px; color: var(--amber);">
+                      ${wait}
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                      ${actions}
+                      ${['paid','fulfilled','completed'].includes(o.status) ? `<button class="btn btn-sm btn-ghost" data-action="verify-payment" data-thread-id="${o.thread_id || o.id}">Verify on Zenith</button>` : ''}
+                      ${btn}
                     </div>
                   </div>
                 </div>
               `;
             }).join('')}
           </div>
+        ${totalPages > 1 ? `
+          <div class="pagination">
+            <button class="btn btn-sm" data-action="orders-prev" ${page === 0 ? 'disabled' : ''}>\u2190 Prev</button>
+            <span class="page-info">${page + 1} / ${totalPages}</span>
+            <button class="btn btn-sm" data-action="orders-next" ${page >= totalPages - 1 ? 'disabled' : ''}>Next \u2192</button>
+          </div>
+        ` : ''}
         ` : `
           <div class="empty-state">
             <div class="empty-icon">\u25CE</div>
@@ -461,19 +607,26 @@ const App = {
   // ---- reputation ----
 
   renderReputation() {
+    const scores = this.state.reputation || [];
+    const attestations = this.state.attestations || [];
+    // find nym labels for display
+    const nymLabel = (id) => {
+      const n = this.state.nyms.find(n => n.id === id);
+      return n ? this.esc(n.label) : this.shortId(id);
+    };
     return `
       <div class="page-header">
         <h2>Reputation</h2>
         <div class="page-desc">Trust scores for pseudonyms</div>
       </div>
       <div class="page-content">
-        ${this.state.reputation.length ? `
+        ${scores.length ? `
           <div class="rep-grid">
-            ${this.state.reputation.map(r => `
+            ${scores.map(r => `
               <div class="rep-card">
-                <div class="rep-nym">${this.shortId(r.nym_id)}</div>
-                <div class="rep-score">${r.score}</div>
-                <div class="rep-label">reputation score</div>
+                <div class="rep-nym">${nymLabel(r.nym_id)}</div>
+                <div class="rep-score">${r.score}<span style="font-size: 14px; color: var(--text-muted);">/100</span></div>
+                <div class="rep-label">${r.count} review${r.count !== 1 ? 's' : ''}</div>
               </div>
             `).join('')}
           </div>
@@ -483,6 +636,28 @@ const App = {
             <div class="empty-text">No reputation data yet</div>
           </div>
         `}
+        ${attestations.length ? `
+          <div class="table-wrap" style="margin-top: 24px;">
+            <div class="table-header">
+              <div class="table-title">Recent Attestations</div>
+            </div>
+            <table>
+              <thead><tr><th>Subject</th><th>Issuer</th><th>Kind</th><th>Score</th><th>Note</th><th>Date</th></tr></thead>
+              <tbody>
+                ${attestations.map(a => `
+                  <tr>
+                    <td class="mono truncate">${nymLabel(a.subject)}</td>
+                    <td class="mono truncate">${nymLabel(a.issuer)}</td>
+                    <td>${a.kind}</td>
+                    <td>${a.score}/100</td>
+                    <td>${this.esc(a.note)}</td>
+                    <td class="mono">${this.fmtDate(a.issued_at)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
       </div>
     `;
   },
@@ -630,6 +805,10 @@ const App = {
           <label>Label</label>
           <input type="text" id="nym-label" placeholder="my-vendor-name" autofocus>
         </div>
+        <div class="form-group">
+          <label>Zenith Wallet Address</label>
+          <input type="text" id="nym-wallet" placeholder="zenith1...">
+        </div>
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
           <button class="btn btn-primary" data-action="submit-create-nym">Create</button>
@@ -655,20 +834,9 @@ const App = {
           <label>Description</label>
           <textarea id="listing-desc" placeholder="Describe your item or service..."></textarea>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-          <div class="form-group">
-            <label>Price</label>
-            <input type="number" id="listing-price" placeholder="0">
-          </div>
-          <div class="form-group">
-            <label>Currency</label>
-            <select id="listing-currency">
-              <option value="usd">USD</option>
-              <option value="eth">ETH</option>
-              <option value="btc">BTC</option>
-              <option value="zen">ZEN</option>
-            </select>
-          </div>
+        <div class="form-group">
+          <label>Price (sZ)</label>
+          <input type="number" id="listing-price" placeholder="0">
         </div>
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
@@ -686,27 +854,22 @@ const App = {
         <h3>Make Offer</h3>
         <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-primary); border-radius: var(--radius); border: 1px solid var(--border-dim);">
           <div style="font-weight: 600; color: var(--text-bright);">${this.esc(l.title)}</div>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Listed at ${this.fmtPrice(l.price, l.currency)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Listed at ${this.fmtPrice(l.price)}</div>
         </div>
         <div class="form-group">
           <label>Your Identity</label>
           <select id="offer-nym">${nymOpts || '<option value="">no identities</option>'}</select>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-          <div class="form-group">
-            <label>Amount</label>
-            <input type="number" id="offer-amount" value="${l.price}" placeholder="0">
-          </div>
-          <div class="form-group">
-            <label>Currency</label>
-            <input type="text" id="offer-currency" value="${l.currency}" readonly>
-          </div>
+        <div class="form-group">
+          <label>Amount (sZ)</label>
+          <input type="number" id="offer-amount" value="${l.price}" readonly>
         </div>
+        ${l.seller_wallet ? `<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">Seller wallet: ${l.seller_wallet}</div>` : ''}
         <input type="hidden" id="offer-listing-id" value="${l.id}">
         <input type="hidden" id="offer-seller" value="${l.seller}">
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
-          <button class="btn btn-primary" data-action="submit-send-offer">Send Offer</button>
+          <button class="btn btn-primary" data-action="submit-send-offer">Buy</button>
         </div>
       `;
     }
@@ -732,11 +895,7 @@ const App = {
       content = `
         <h3>Send Invoice</h3>
         <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
-          Provide a payment address for the buyer to send funds to.
-        </div>
-        <div class="form-group">
-          <label>Pay Address</label>
-          <input type="text" id="invoice-pay-address" placeholder="0x... or payment address" autofocus>
+          Invoice the buyer for this order. Payment address will be derived from your identity's wallet.
         </div>
         <input type="hidden" id="invoice-thread-id" value="${data.threadId || ''}">
         <div class="form-actions">
@@ -782,6 +941,94 @@ const App = {
       `;
     }
 
+    if (name === 'send-message') {
+      const l = data;
+      const nymOpts = this.state.nyms.map(n =>
+        `<option value="${n.id}">${this.esc(n.label)}</option>`
+      ).join('');
+      content = `
+        <h3>Message Seller</h3>
+        <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-primary); border-radius: var(--radius); border: 1px solid var(--border-dim);">
+          <div style="font-weight: 600; color: var(--text-bright);">${this.esc(l.title)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">${this.fmtPrice(l.price)}</div>
+        </div>
+        <div class="form-group">
+          <label>Your Identity</label>
+          <select id="msg-nym">${nymOpts || '<option value="">no identities</option>'}</select>
+        </div>
+        <div class="form-group">
+          <label>Message</label>
+          <textarea id="msg-text" placeholder="Ask the seller a question..." autofocus></textarea>
+        </div>
+        <input type="hidden" id="msg-listing-id" value="${l.id}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-send-message">Send</button>
+        </div>
+      `;
+    }
+
+    if (name === 'send-reply') {
+      const nymOpts = this.state.nyms.map(n =>
+        `<option value="${n.id}">${this.esc(n.label)}</option>`
+      ).join('');
+      content = `
+        <h3>Reply</h3>
+        <div class="form-group">
+          <label>Your Identity</label>
+          <select id="reply-nym">${nymOpts || '<option value="">no identities</option>'}</select>
+        </div>
+        <div class="form-group">
+          <label>Message</label>
+          <textarea id="reply-text" placeholder="Type your reply..." autofocus></textarea>
+        </div>
+        <input type="hidden" id="reply-thread-id" value="${data.threadId || ''}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-send-reply">Send</button>
+        </div>
+      `;
+    }
+
+    if (name === 'leave-feedback') {
+      // auto-detect the user's nym in this order
+      const order = this.state.orders.find(o => o.thread_id === data.threadId)
+        || this.state.threads.find(t => t.id === data.threadId);
+      const myNymIds = new Set(this.state.nyms.map(n => n.id));
+      let myNym = '';
+      let counterLabel = 'counterparty';
+      if (order) {
+        if (myNymIds.has(order.buyer)) {
+          myNym = order.buyer;
+          counterLabel = 'seller';
+        } else if (myNymIds.has(order.seller)) {
+          myNym = order.seller;
+          counterLabel = 'buyer';
+        }
+      }
+      const nymObj = this.state.nyms.find(n => n.id === myNym);
+      content = `
+        <h3>Leave Feedback</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Rate the ${counterLabel}${nymObj ? ` as <strong style="color:var(--text-bright);">${this.esc(nymObj.label)}</strong>` : ''}.
+        </div>
+        <div class="form-group">
+          <label>Score (0-100)</label>
+          <input type="number" id="feedback-score" min="0" max="100" value="80" autofocus>
+        </div>
+        <div class="form-group">
+          <label>Note</label>
+          <textarea id="feedback-note" placeholder="How was the transaction?"></textarea>
+        </div>
+        <input type="hidden" id="feedback-thread-id" value="${data.threadId || ''}">
+        <input type="hidden" id="feedback-nym" value="${myNym}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-leave-feedback">Submit</button>
+        </div>
+      `;
+    }
+
     if (name === 'discover-relay') {
       content = `
         <h3>Discover Relay</h3>
@@ -819,7 +1066,10 @@ const App = {
             this.openDialog('create-nym');
             break;
           case 'submit-create-nym':
-            this.action(() => SilkAPI.createNym(document.getElementById('nym-label').value));
+            this.action(() => SilkAPI.createNym(
+              document.getElementById('nym-label').value,
+              document.getElementById('nym-wallet').value
+            ));
             break;
           case 'drop-nym':
             if (confirm('Delete this identity?')) {
@@ -834,7 +1084,7 @@ const App = {
               document.getElementById('listing-title').value,
               document.getElementById('listing-desc').value,
               parseInt(document.getElementById('listing-price').value) || 0,
-              document.getElementById('listing-currency').value,
+              'sZ',
               document.getElementById('listing-nym').value,
             ));
             break;
@@ -854,7 +1104,7 @@ const App = {
               document.getElementById('offer-listing-id').value,
               document.getElementById('offer-seller').value,
               parseInt(document.getElementById('offer-amount').value) || 0,
-              document.getElementById('offer-currency').value,
+              'sZ',
               document.getElementById('offer-nym').value,
             ));
             break;
@@ -870,7 +1120,6 @@ const App = {
           case 'submit-send-invoice':
             this.action(() => SilkAPI.sendInvoice(
               document.getElementById('invoice-thread-id').value,
-              document.getElementById('invoice-pay-address').value,
             ));
             break;
           case 'open-submit-payment':
@@ -895,6 +1144,45 @@ const App = {
             if (confirm('Confirm this order is complete?')) {
               this.action(() => SilkAPI.confirmComplete(el.dataset.threadId));
             }
+            break;
+          case 'verify-payment':
+            this.action(async () => {
+              const res = await SilkAPI.verifyPayment(el.dataset.threadId);
+              if (res.verified === true) this.toast('Payment verified on Zenith', 'success');
+              else if (res.verified === false) this.toast('Payment NOT verified — balance too low', 'error');
+              else this.toast('Verification queued — refresh in a moment', '');
+            });
+            break;
+          case 'open-send-message':
+            this.openDialog('send-message', JSON.parse(el.dataset.listing));
+            break;
+          case 'submit-send-message':
+            this.action(() => SilkAPI.sendMessage(
+              document.getElementById('msg-listing-id').value,
+              document.getElementById('msg-nym').value,
+              document.getElementById('msg-text').value,
+            ));
+            break;
+          case 'open-send-reply':
+            this.openDialog('send-reply', { threadId: el.dataset.threadId });
+            break;
+          case 'submit-send-reply':
+            this.action(() => SilkAPI.sendReply(
+              document.getElementById('reply-thread-id').value,
+              document.getElementById('reply-nym').value,
+              document.getElementById('reply-text').value,
+            ));
+            break;
+          case 'open-leave-feedback':
+            this.openDialog('leave-feedback', { threadId: el.dataset.threadId });
+            break;
+          case 'submit-leave-feedback':
+            this.action(() => SilkAPI.leaveFeedback(
+              document.getElementById('feedback-thread-id').value,
+              parseInt(document.getElementById('feedback-score').value) || 0,
+              document.getElementById('feedback-note').value,
+              document.getElementById('feedback-nym').value,
+            ));
             break;
           case 'open-add-peer':
             this.openDialog('add-peer');
@@ -926,6 +1214,22 @@ const App = {
               const cur = this.state.skeinStats.minHops || 0;
               if (cur > 0) this.action(() => SilkAPI.setMinHops(cur - 1));
             }
+            break;
+          case 'threads-prev':
+            this.state.threadsPage = Math.max(0, (this.state.threadsPage || 0) - 1);
+            this.render();
+            break;
+          case 'threads-next':
+            this.state.threadsPage = (this.state.threadsPage || 0) + 1;
+            this.render();
+            break;
+          case 'orders-prev':
+            this.state.ordersPage = Math.max(0, (this.state.ordersPage || 0) - 1);
+            this.render();
+            break;
+          case 'orders-next':
+            this.state.ordersPage = (this.state.ordersPage || 0) + 1;
+            this.render();
             break;
           case 'close-dialog':
           case 'close-dialog-bg':

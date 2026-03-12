@@ -30,7 +30,7 @@ window.SilkAPI = {
   getPeers()      { return this.get('peers'); },
 
   // writes
-  createNym(label)  { return this.post({ action: 'create-nym', label }); },
+  createNym(label, wallet)  { return this.post({ action: 'create-nym', label, wallet }); },
   dropNym(id)       { return this.post({ action: 'drop-nym', id }); },
 
   postListing(title, description, price, currency, nym) {
@@ -52,8 +52,8 @@ window.SilkAPI = {
     return this.post({ action: 'reject-offer', thread_id, offer_id, reason });
   },
 
-  sendInvoice(thread_id, pay_address) {
-    return this.post({ action: 'send-invoice', thread_id, pay_address });
+  sendInvoice(thread_id) {
+    return this.post({ action: 'send-invoice', thread_id });
   },
   submitPayment(thread_id, tx_hash) {
     return this.post({ action: 'submit-payment', thread_id, tx_hash });
@@ -63,6 +63,19 @@ window.SilkAPI = {
   },
   confirmComplete(thread_id) {
     return this.post({ action: 'confirm-complete', thread_id });
+  },
+  verifyPayment(thread_id) {
+    return this.post({ action: 'verify-payment', thread_id });
+  },
+
+  leaveFeedback(thread_id, score, note, nym) {
+    return this.post({ action: 'leave-feedback', thread_id, score, note, nym });
+  },
+  sendMessage(listing_id, nym, text) {
+    return this.post({ action: 'send-message', listing_id, nym, text });
+  },
+  sendReply(thread_id, nym, text) {
+    return this.post({ action: 'send-reply', thread_id, nym, text });
   },
 
   // skein relay management (talks to skein API on same ship)

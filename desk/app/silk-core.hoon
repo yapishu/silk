@@ -7,26 +7,78 @@
 /-  *silk
 /+  dbug, verb, default-agent, server
 |%
+::  old types for state migration
++$  pseudonym-v0
+  $:  id=nym-id
+      label=@t
+      pubkey=@ux
+      created-at=@da
+  ==
++$  thread-v2
+  $:  id=thread-id
+      listing-id=listing-id
+      buyer=nym-id
+      seller=nym-id
+      =thread-status
+      messages=(list silk-message)
+      started-at=@da
+      updated-at=@da
+  ==
 +$  state-0
   $:  %0
-      nyms=(map nym-id pseudonym)
+      nyms=(map nym-id pseudonym-v0)
       listings=(map listing-id listing)
-      threads=(map thread-id silk-thread)
+      threads=(map thread-id thread-v2)
       routes=(map nym-id nym-route)
       next-seq=@ud
   ==
 ::
 +$  state-1
   $:  %1
-      nyms=(map nym-id pseudonym)
+      nyms=(map nym-id pseudonym-v0)
       listings=(map listing-id listing)
-      threads=(map thread-id silk-thread)
+      threads=(map thread-id thread-v2)
       routes=(map nym-id nym-route)
       peers=(set @p)
       next-seq=@ud
   ==
 ::
-+$  current-state  state-1
++$  state-2
+  $:  %2
+      nyms=(map nym-id pseudonym-v0)
+      listings=(map listing-id listing)
+      threads=(map thread-id thread-v2)
+      routes=(map nym-id nym-route)
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      next-seq=@ud
+  ==
+::
++$  state-3
+  $:  %3
+      nyms=(map nym-id pseudonym-v0)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      routes=(map nym-id nym-route)
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      next-seq=@ud
+  ==
+::
++$  state-4
+  $:  %4
+      nyms=(map nym-id pseudonym)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      routes=(map nym-id nym-route)
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      ::  zenith verification: thread-id -> [verified balance checked-at]
+      verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
+      next-seq=@ud
+  ==
+::
++$  current-state  state-4
 +$  card  card:agent:gall
 ::
 ++  skein-app  %silk-core
@@ -64,6 +116,38 @@
   %+  give-simple-payload:app:server  eyre-id
   [[status headers] body]
 ::
+::  compute chain hash from a message list (stored newest-first)
+::
+++  compute-chain
+  |=  msgs=(list silk-message)
+  ^-  @ux
+  =/  ordered=(list silk-message)  (flop msgs)
+  =/  h=@ux  `@ux`0
+  |-
+  ?~  ordered  h
+  $(ordered t.ordered, h `@ux`(sham [h -.i.ordered]))
+::
+::  advance chain by one step
+::
+++  advance-chain
+  |=  [prev=@ux tag=@tas]
+  ^-  @ux
+  `@ux`(sham [prev tag])
+::
+::  migrate v0 pseudonym (no wallet) to current (with wallet)
+::
+++  migrate-nym
+  |=  n=pseudonym-v0
+  ^-  pseudonym
+  [id.n label.n pubkey.n '' created-at.n]
+::
+::  migrate v2 thread (no chain) to v3 thread (with chain)
+::
+++  migrate-thread
+  |=  t=thread-v2
+  ^-  silk-thread
+  [id.t listing-id.t buyer.t seller.t thread-status.t messages.t (compute-chain messages.t) started-at.t updated-at.t]
+::
 ++  give-json
   |=  [eyre-id=@ta jon=json]
   ^-  (list card)
@@ -94,24 +178,58 @@
 ++  on-load
   |=  old=vase
   ^-  (quip card _this)
-  =/  new  (mule |.(!<(current-state old)))
-  ?:  ?=(%& -.new)
-    =.  state  p.new
-    :_  this
+  =/  load-cards=(list card)
     :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
         [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
         [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
     ==
-  =/  old-try  (mule |.(!<(state-0 old)))
-  =.  state
-    ?:  ?=(%& -.old-try)
-      [%1 nyms.p.old-try listings.p.old-try threads.p.old-try routes.p.old-try ~ next-seq.p.old-try]
-    [%1 ~ ~ ~ ~ ~ 1]
-  :_  this
-  :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
-      [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
-      [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
-  ==
+  =/  try-4  (mule |.(!<(state-4 old)))
+  ?:  ?=(%& -.try-4)
+    =.  state  p.try-4
+    [load-cards this]
+  =/  try-3  (mule |.(!<(state-3 old)))
+  ?:  ?=(%& -.try-3)
+    =.  state
+      :*  %4
+          (~(run by nyms.p.try-3) migrate-nym)
+          listings.p.try-3  threads.p.try-3
+          routes.p.try-3  peers.p.try-3
+          attestations.p.try-3  ~  next-seq.p.try-3
+      ==
+    [load-cards this]
+  =/  try-2  (mule |.(!<(state-2 old)))
+  ?:  ?=(%& -.try-2)
+    =.  state
+      :*  %4
+          (~(run by nyms.p.try-2) migrate-nym)
+          listings.p.try-2
+          (~(run by threads.p.try-2) migrate-thread)
+          routes.p.try-2  peers.p.try-2
+          attestations.p.try-2  ~  next-seq.p.try-2
+      ==
+    [load-cards this]
+  =/  try-1  (mule |.(!<(state-1 old)))
+  ?:  ?=(%& -.try-1)
+    =.  state
+      :*  %4
+          (~(run by nyms.p.try-1) migrate-nym)
+          listings.p.try-1
+          (~(run by threads.p.try-1) migrate-thread)
+          routes.p.try-1  peers.p.try-1  ~  ~  next-seq.p.try-1
+      ==
+    [load-cards this]
+  =/  try-0  (mule |.(!<(state-0 old)))
+  ?:  ?=(%& -.try-0)
+    =.  state
+      :*  %4
+          (~(run by nyms.p.try-0) migrate-nym)
+          listings.p.try-0
+          (~(run by threads.p.try-0) migrate-thread)
+          routes.p.try-0  ~  ~  ~  next-seq.p.try-0
+      ==
+    [load-cards this]
+  =.  state  [%4 ~ ~ ~ ~ ~ ~ ~ 1]
+  [load-cards this]
 ::
 ++  on-poke
   |=  [=mark =vase]
@@ -221,37 +339,108 @@
       ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent routes.msg) %routes]
       :-  [(event-card [%catalog-received (lent listings.msg)])]~
       this
+    ::  non-thread messages
+    ?:  ?=(%attest -.msg)
+      =/  att=attestation  +.msg
+      =.  attestations.state  (~(put by attestations.state) id.att att)
+      :_  this
+      :~  [%pass /silk/rep %agent [our.bowl %silk-rep] %poke %noun !>([%import att])]
+          (event-card [%attestation-received att])
+      ==
+    ?:  ?=(%listing-retracted -.msg)
+      ~&  [%silk-gossip %listing-retracted id.+.msg]
+      =.  listings.state  (~(del by listings.state) id.+.msg)
+      :-  [(event-card [%listing-retracted id.+.msg])]~
+      this
+    ::  thread sync: respond with full thread if chain differs
+    ?:  ?=(%sync-thread -.msg)
+      =/  our-thd=(unit silk-thread)  (~(get by threads.state) thread-id.msg)
+      ?~  our-thd  `this
+      ?.  !=(chain.msg chain.u.our-thd)  `this
+      ::  chain mismatch — send our thread state
+      =/  sender-nym=nym-id  buyer.u.our-thd
+      =/  route=(unit nym-route)  (~(get by routes.state) sender-nym)
+      ?~  route  `this
+      :_  this
+      [(skein-send-card our.bowl u.route [%sync-thread-response u.our-thd])]~
+    ::  thread sync response: merge if their chain is longer
+    ?:  ?=(%sync-thread-response -.msg)
+      =/  remote-thd=silk-thread  +.msg
+      =/  our-thd=(unit silk-thread)  (~(get by threads.state) id.remote-thd)
+      ?~  our-thd
+        ::  we don't have this thread at all, adopt it
+        =.  threads.state  (~(put by threads.state) id.remote-thd remote-thd)
+        :-  [(event-card [%thread-opened remote-thd])]~
+        this
+      ::  adopt if they have more messages (simple strategy)
+      ?.  (gth (lent messages.remote-thd) (lent messages.u.our-thd))
+        `this
+      =.  threads.state  (~(put by threads.state) id.remote-thd remote-thd)
+      :-  [(event-card [%thread-updated id.remote-thd thread-status.remote-thd])]~
+      this
     ::  thread-routed messages
     =/  tid=thread-id
-      ?+  -.msg  (sham raw)
-        %offer          thread-id.msg
-        %counter-offer  thread-id.msg
-        %accept         thread-id.msg
-        %reject         thread-id.msg
-        %invoice        thread-id.msg
-        %payment-proof  thread-id.msg
-        %fulfill        thread-id.msg
-        %dispute        thread-id.msg
-        %verdict        thread-id.msg
-        %ping           thread-id.msg
-        %pong           thread-id.msg
+      ?-  -.msg
+        %offer           thread-id.msg
+        %counter-offer   thread-id.msg
+        %accept          thread-id.msg
+        %reject          thread-id.msg
+        %invoice         thread-id.msg
+        %payment-proof   thread-id.msg
+        %fulfill         thread-id.msg
+        %dispute         thread-id.msg
+        %verdict         thread-id.msg
+        %complete        thread-id.msg
+        %direct-message  thread-id.msg
+        %ack             thread-id.msg
+        %ping            thread-id.msg
+        %pong            thread-id.msg
       ==
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
-      ::  create thread on first contact (e.g. seller receives offer)
-      ?.  ?=(%offer -.msg)
-        :-  [(event-card [%message-received tid msg])]~
-        this
-      =/  o=offer  +.msg
-      =/  new-thd=silk-thread
-        [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] now.bowl now.bowl]
-      =.  threads.state  (~(put by threads.state) tid new-thd)
-      :-  :~  (event-card [%thread-opened new-thd])
+      ::  create thread on first contact
+      ?:  ?=(%offer -.msg)
+        =/  o=offer  +.msg
+        =/  init-chain=@ux  (advance-chain `@ux`0 %offer)
+        =/  new-thd=silk-thread
+          [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] init-chain now.bowl now.bowl]
+        =.  threads.state  (~(put by threads.state) tid new-thd)
+        ::  send ack back to buyer
+        =/  route=(unit nym-route)  (~(get by routes.state) buyer.o)
+        =/  ack-cards=(list card)
+          ?~  route  ~
+          [(skein-send-card our.bowl u.route [%ack tid `@ux`(sham msg) now.bowl])]~
+        =/  ev-cards=(list card)
+          :~  (event-card [%thread-opened new-thd])
               (event-card [%message-received tid msg])
           ==
+        :-  (weld ev-cards ack-cards)
+        this
+      ?:  ?=(%direct-message -.msg)
+        =/  dm-lid=listing-id  listing-id.+.msg
+        =/  dm-sender=nym-id  sender.+.msg
+        =/  lst=(unit listing)  (~(get by listings.state) dm-lid)
+        =/  dm-seller=nym-id
+          ?~(lst dm-sender seller.u.lst)
+        =/  init-chain=@ux  (advance-chain `@ux`0 %direct-message)
+        =/  new-thd=silk-thread
+          [tid dm-lid dm-sender dm-seller %open [msg ~] init-chain now.bowl now.bowl]
+        =.  threads.state  (~(put by threads.state) tid new-thd)
+        :-  :~  (event-card [%thread-opened new-thd])
+                (event-card [%message-received tid msg])
+            ==
+        this
+      ::  unknown thread, log and drop
+      :-  [(event-card [%message-received tid msg])]~
       this
+    ::  acks don't advance state, just log receipt
+    ?:  ?=(%ack -.msg)
+      ~&  [%silk-ack %received tid msg-hash.msg]
+      `this
     ::  update thread status based on inbound message type
     =/  new-status=thread-status
+      ?:  ?=(?(%offer %counter-offer) -.msg)
+        %open
       ?:  ?=(%accept -.msg)
         %accepted
       ?:  ?=(%reject -.msg)
@@ -260,15 +449,32 @@
         %paid
       ?:  ?=(%fulfill -.msg)
         %fulfilled
+      ?:  ?=(%complete -.msg)
+        %completed
       ?:  ?=(%dispute -.msg)
         %disputed
       ?:  ?=(%verdict -.msg)
         %resolved
       thread-status.u.thd
+    ::  advance chain hash
+    =/  new-chain=@ux  (advance-chain chain.u.thd `@tas`-.msg)
     =/  updated=silk-thread
-      u.thd(thread-status new-status, messages [msg messages.u.thd], updated-at now.bowl)
+      u.thd(thread-status new-status, messages [msg messages.u.thd], chain new-chain, updated-at now.bowl)
     =.  threads.state  (~(put by threads.state) tid updated)
-    :-  [(event-card [%message-received tid msg])]~
+    ::  send ack back to message sender
+    =/  sender-nym=nym-id
+      ?:  ?=(?(%offer %counter-offer %payment-proof %complete) -.msg)
+        buyer.u.thd
+      ?:  ?=(%direct-message -.msg)
+        sender.+.msg
+      ?:  ?=(%dispute -.msg)
+        plaintiff.+.msg
+      seller.u.thd
+    =/  route=(unit nym-route)  (~(get by routes.state) sender-nym)
+    =/  ack-cards=(list card)
+      ?~  route  ~
+      [(skein-send-card our.bowl u.route [%ack tid `@ux`(sham msg) now.bowl])]~
+    :-  (weld [(event-card [%message-received tid msg])]~ ack-cards)
     this
   ==
   ::
@@ -350,6 +556,16 @@
             ?~  msgs  [| '']
             ?:  ?=(%invoice -.i.msgs)  [& pay-address.+.i.msgs]
             $(msgs t.msgs)
+          =/  seller-wallet=@t
+            =/  snym=(unit pseudonym)  (~(get by nyms.state) seller.t)
+            ?~  snym  ''
+            wallet.u.snym
+          =/  buyer-wallet=@t
+            =/  bnym=(unit pseudonym)  (~(get by nyms.state) buyer.t)
+            ?~  bnym  ''
+            wallet.u.bnym
+          =/  veri=(unit [verified=? balance=@ud checked-at=@da])
+            (~(get by verifications.state) id.t)
           %-  pairs:enjs:format
           :~  ['thread_id' s+(scot %uv id.t)]
               ['listing_id' s+(scot %uv listing-id.t)]
@@ -360,16 +576,55 @@
               ['currency' s+`@t`cur.offer-data]
               ['has_invoice' b+has.invoice-info]
               ['pay_address' s+pa.invoice-info]
+              ['seller_wallet' s+seller-wallet]
+              ['buyer_wallet' s+buyer-wallet]
+              :-  'verification'
+              ?~  veri  ~
+              %-  pairs:enjs:format
+              :~  ['verified' b+verified.u.veri]
+                  ['balance' (numb:enjs:format balance.u.veri)]
+                  ['checked_at' (numb:enjs:format (div (sub checked-at.u.veri ~1970.1.1) ~s1))]
+              ==
+              ['messages' [%a (turn (flop messages.t) message-to-json)]]
               ['updated_at' (numb:enjs:format (div (sub updated-at.t ~1970.1.1) ~s1))]
           ==
       ==
     ::
         [%reputation ~]
+      =/  atts=(list attestation)  ~(val by attestations.state)
+      =/  score-map=(map nym-id [total=@ud count=@ud])
+        =/  ats=(list attestation)  atts
+        =/  acc=(map nym-id [total=@ud count=@ud])  ~
+        |-
+        ?~  ats  acc
+        =/  cur  (~(get by acc) subject.i.ats)
+        =/  prev=[total=@ud count=@ud]  ?~(cur [0 0] u.cur)
+        $(ats t.ats, acc (~(put by acc) subject.i.ats [(add total.prev score.i.ats) +(count.prev)]))
       %-  give-json  :-  eyre-id
       %-  pairs:enjs:format
-      :~  ['scores' [%a ~]]
-          ['issued' [%a ~]]
-          ['received' [%a ~]]
+      :~  :-  'scores'
+          :-  %a
+          %+  turn  ~(tap by score-map)
+          |=  [nid=nym-id total=@ud count=@ud]
+          %-  pairs:enjs:format
+          :~  ['nym_id' s+(scot %uv nid)]
+              ['score' (numb:enjs:format ?:(=(0 count) 0 (div total count)))]
+              ['count' (numb:enjs:format count)]
+          ==
+        ::
+          :-  'attestations'
+          :-  %a
+          %+  turn  atts
+          |=  a=attestation
+          %-  pairs:enjs:format
+          :~  ['id' s+(scot %uv id.a)]
+              ['subject' s+(scot %uv subject.a)]
+              ['issuer' s+(scot %uv issuer.a)]
+              ['kind' s+`@t`kind.a]
+              ['score' (numb:enjs:format score.a)]
+              ['note' s+note.a]
+              ['issued_at' (numb:enjs:format (div (sub issued-at.a ~1970.1.1) ~s1))]
+          ==
       ==
     ::
         [%stats ~]
@@ -410,6 +665,14 @@
       (handle-api-fulfill eyre-id u.jon)
     ?:  =(%'confirm-complete' u.typ)
       (handle-api-complete eyre-id u.jon)
+    ?:  =(%'leave-feedback' u.typ)
+      (handle-api-feedback eyre-id u.jon)
+    ?:  =(%'send-message' u.typ)
+      (handle-api-message eyre-id u.jon)
+    ?:  =(%'send-reply' u.typ)
+      (handle-api-reply eyre-id u.jon)
+    ?:  =(%'verify-payment' u.typ)
+      (handle-api-verify eyre-id u.jon)
     ::  existing command flow
     =/  cmd=(unit silk-command)  (parse-action u.jon)
     ?~  cmd
@@ -436,8 +699,8 @@
     =/  typ=@t  ((ot ~[action+so]) jon)
     ?+  typ  !!
         %'create-nym'
-      =/  label=@t  ((ot ~[label+so]) jon)
-      [%create-nym label]
+      =/  [label=@t wallet=@t]  ((ot ~[label+so wallet+so]) jon)
+      [%create-nym label wallet]
     ::
         %'drop-nym'
       =/  id=@t  ((ot ~[id+so]) jon)
@@ -508,19 +771,19 @@
     ?:  ?=(%offer -.i.msgs)  `+.i.msgs
     $(msgs t.msgs)
   ::
-  ++  find-invoice-id
+  ++  find-invoice
     |=  msgs=(list silk-message)
-    ^-  (unit invoice-id)
+    ^-  (unit invoice)
     ?~  msgs  ~
-    ?:  ?=(%invoice -.i.msgs)  `id.+.i.msgs
+    ?:  ?=(%invoice -.i.msgs)  `+.i.msgs
     $(msgs t.msgs)
   ::
   ++  handle-api-invoice
     |=  [eyre-id=@ta jon=json]
     ^-  (quip card _this)
-    =,  dejs:format
-    =/  f  (ot ~['thread_id'^so 'pay_address'^so])
-    =/  [tid-t=@t pa=@t]  (f jon)
+    =/  tid-t=@t
+      =,  dejs:format
+      ((ot ~['thread_id'^so]) jon)
     =/  tid=@uv  (slav %uv tid-t)
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
@@ -528,6 +791,12 @@
     =/  off=(unit offer)  (find-offer messages.u.thd)
     ?~  off
       :_(this (err-response eyre-id 'no offer in thread'))
+    ::  derive pay address from seller's wallet
+    =/  seller-nym=(unit pseudonym)  (~(get by nyms.state) seller.u.thd)
+    ?~  seller-nym
+      :_(this (err-response eyre-id 'seller nym not found'))
+    ?:  =('' wallet.u.seller-nym)
+      :_(this (err-response eyre-id 'seller has no wallet set'))
     =/  inv=invoice
       :*  (sham [our.bowl now.bowl tid])
           tid
@@ -535,7 +804,7 @@
           seller.u.thd
           amount.u.off
           currency.u.off
-          pa
+          wallet.u.seller-nym
           (add now.bowl ~d7)
       ==
     =/  result  (handle-command [%send-invoice inv])
@@ -546,20 +815,24 @@
   ++  handle-api-payment
     |=  [eyre-id=@ta jon=json]
     ^-  (quip card _this)
-    =,  dejs:format
-    =/  f  (ot ~['thread_id'^so 'tx_hash'^so])
-    =/  [tid-t=@t txh-t=@t]  (f jon)
+    =/  [tid-t=@t txh-t=@t]
+      =,  dejs:format
+      ((ot ~['thread_id'^so 'tx_hash'^so]) jon)
     =/  tid=@uv  (slav %uv tid-t)
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
       :_(this (err-response eyre-id 'thread not found'))
-    =/  inv-id=invoice-id
-      =/  found  (find-invoice-id messages.u.thd)
-      ?~(found (sham tid) u.found)
+    ::  validate: thread must have an invoice
+    =/  inv=(unit invoice)  (find-invoice messages.u.thd)
+    ?~  inv
+      :_(this (err-response eyre-id 'no invoice in thread - seller must invoice first'))
+    ::  validate: tx hash must not be empty
+    ?:  =('' txh-t)
+      :_(this (err-response eyre-id 'tx_hash is required'))
     =/  pp=payment-proof
       :*  tid
-          inv-id
-          `@ux`(sham txh-t)
+          id.u.inv
+          txh-t
           now.bowl
       ==
     =/  result  (handle-command [%submit-payment pp])
@@ -570,9 +843,9 @@
   ++  handle-api-fulfill
     |=  [eyre-id=@ta jon=json]
     ^-  (quip card _this)
-    =,  dejs:format
-    =/  f  (ot ~['thread_id'^so note+so])
-    =/  [tid-t=@t note=@t]  (f jon)
+    =/  [tid-t=@t ful-note=@t]
+      =,  dejs:format
+      ((ot ~['thread_id'^so note+so]) jon)
     =/  tid=@uv  (slav %uv tid-t)
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
@@ -582,7 +855,7 @@
     =/  ful=fulfillment
       :*  tid
           oid
-          note
+          ful-note
           ~
           now.bowl
       ==
@@ -594,19 +867,172 @@
   ++  handle-api-complete
     |=  [eyre-id=@ta jon=json]
     ^-  (quip card _this)
-    =,  dejs:format
-    =/  tid-t=@t  ((ot ~['thread_id'^so]) jon)
+    =/  tid-t=@t
+      =,  dejs:format
+      ((ot ~['thread_id'^so]) jon)
     =/  tid=@uv  (slav %uv tid-t)
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
       :_(this (err-response eyre-id 'thread not found'))
+    =/  complete-msg=silk-message  [%complete tid now.bowl]
+    =/  nc=@ux  (advance-chain chain.u.thd %complete)
     =/  updated=silk-thread
-      u.thd(thread-status %completed, updated-at now.bowl)
+      u.thd(thread-status %completed, messages [complete-msg messages.u.thd], chain nc, updated-at now.bowl)
     =.  threads.state  (~(put by threads.state) tid updated)
+    ::  send completion to counterparty over skein
+    =/  counter=nym-id  seller.u.thd
+    =/  route=(unit nym-route)  (~(get by routes.state) counter)
+    =/  send-cards=(list card)
+      ?~  route
+        ~&  [%silk-warn %no-route-for-complete counter]
+        ~
+      [(skein-send-card our.bowl u.route complete-msg)]~
     :_  this
-    %+  weld
-      [(event-card [%thread-updated tid %completed])]~
+    %+  weld  [(event-card [%thread-updated tid %completed])]~
+    %+  weld  send-cards
     (ok-response eyre-id)
+  ::
+  ++  handle-api-feedback
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =/  parsed=[tid-t=@t sc=@ud nt=@t nym-t=@t]
+      =,  dejs:format
+      ((ot ~['thread_id'^so score+ni note+so nym+so]) jon)
+    =/  tid=@uv  (slav %uv tid-t.parsed)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  issuer=nym-id  (slav %uv nym-t.parsed)
+    =/  subject=nym-id
+      ?:  =(issuer buyer.u.thd)
+        seller.u.thd
+      buyer.u.thd
+    =/  att=attestation
+      :*  (sham [our.bowl now.bowl tid issuer])
+          subject
+          issuer
+          %completion
+          sc.parsed
+          nt.parsed
+          now.bowl
+          `@ux`0
+      ==
+    =.  attestations.state  (~(put by attestations.state) id.att att)
+    =/  route=(unit nym-route)  (~(get by routes.state) subject)
+    =/  send-cards=(list card)
+      ?~  route  ~
+      [(skein-send-card our.bowl u.route [%attest att])]~
+    =/  all-cards=(list card)
+      :*  [%pass /silk/rep %agent [our.bowl %silk-rep] %poke %noun !>([%issue att])]
+          (weld send-cards (ok-response eyre-id))
+      ==
+    :_(this all-cards)
+  ::
+  ++  handle-api-message
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =/  parsed=[lid-t=@t nym-t=@t text=@t]
+      =,  dejs:format
+      ((ot ~['listing_id'^so nym+so text+so]) jon)
+    =/  lid-t=@t  lid-t.parsed
+    =/  nym-t=@t  nym-t.parsed
+    =/  text=@t  text.parsed
+    =/  lid=@uv  (slav %uv lid-t)
+    =/  sender=nym-id  (slav %uv nym-t)
+    =/  lst=(unit listing)  (~(get by listings.state) lid)
+    ?~  lst
+      :_(this (err-response eyre-id 'listing not found'))
+    =/  tid=thread-id  (sham [lid sender seller.u.lst %dm now.bowl])
+    =/  dm=silk-message  [%direct-message tid lid sender text now.bowl]
+    =/  init-chain=@ux  (advance-chain `@ux`0 %direct-message)
+    =/  new-thd=silk-thread
+      [tid lid sender seller.u.lst %open [dm ~] init-chain now.bowl now.bowl]
+    =.  threads.state  (~(put by threads.state) tid new-thd)
+    =/  sender-route=nym-route  [sender our.bowl %silk-core]
+    =.  routes.state  (~(put by routes.state) sender sender-route)
+    =/  route=(unit nym-route)  (~(get by routes.state) seller.u.lst)
+    =/  send-cards=(list card)
+      ?~  route
+        ~&  [%silk-warn %no-route-for-dm seller.u.lst]
+        ~
+      :~  (skein-send-card our.bowl u.route dm)
+          (skein-send-card our.bowl u.route [%catalog ~ [sender-route]~])
+      ==
+    :_  this
+    %+  weld  [(event-card [%thread-opened new-thd])]~
+    %+  weld  send-cards
+    (ok-response eyre-id)
+  ::
+  ++  handle-api-reply
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =/  parsed=[tid-t=@t nym-t=@t text=@t]
+      =,  dejs:format
+      ((ot ~['thread_id'^so nym+so text+so]) jon)
+    =/  tid-t=@t  tid-t.parsed
+    =/  nym-t=@t  nym-t.parsed
+    =/  text=@t  text.parsed
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  sender=nym-id  (slav %uv nym-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    =/  dm=silk-message
+      [%direct-message tid listing-id.u.thd sender text now.bowl]
+    =/  nc=@ux  (advance-chain chain.u.thd %direct-message)
+    =/  updated=silk-thread
+      u.thd(messages [dm messages.u.thd], chain nc, updated-at now.bowl)
+    =.  threads.state  (~(put by threads.state) tid updated)
+    =/  counter=nym-id
+      ?:  =(sender buyer.u.thd)
+        seller.u.thd
+      buyer.u.thd
+    =/  route=(unit nym-route)  (~(get by routes.state) counter)
+    =/  send-cards=(list card)
+      ?~  route  ~
+      [(skein-send-card our.bowl u.route dm)]~
+    :_  this
+    %+  weld  [(event-card [%message-received tid dm])]~
+    %+  weld  send-cards
+    (ok-response eyre-id)
+  ::
+  ++  handle-api-verify
+    |=  [eyre-id=@ta jon=json]
+    ^-  (quip card _this)
+    =/  tid-t=@t
+      =,  dejs:format
+      ((ot ~['thread_id'^so]) jon)
+    =/  tid=@uv  (slav %uv tid-t)
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    ?~  thd
+      :_(this (err-response eyre-id 'thread not found'))
+    ::  look up seller wallet
+    =/  seller-nym=(unit pseudonym)  (~(get by nyms.state) seller.u.thd)
+    =/  seller-wallet=@t  ?~(seller-nym '' wallet.u.seller-nym)
+    ::  look up invoice
+    =/  inv=(unit invoice)  (find-invoice messages.u.thd)
+    =/  inv-amount=@ud  ?~(inv 0 amount.u.inv)
+    ::  look up existing verification
+    =/  ver=(unit [verified=? balance=@ud checked-at=@da])
+      (~(get by verifications.state) tid)
+    ::  fire balance check thread via %khan if seller has a wallet
+    =/  khan-cards=(list card)
+      ?:  =('' seller-wallet)  ~
+      :~  [%pass /zenith-check/(scot %uv tid) %arvo %k %fard %zenith %get-balances-by-addr %noun !>(seller-wallet)]
+      ==
+    ::  return current state immediately
+    =/  resp=json
+      %-  pairs:enjs:format
+      :~  ['thread_id' s+(scot %uv tid)]
+          ['seller_wallet' s+seller-wallet]
+          ['invoice_amount' (numb:enjs:format inv-amount)]
+          ['status' s+`@t`thread-status.u.thd]
+          ['verified' ?~(ver ~ b+verified.u.ver)]
+          ['balance' ?~(ver ~ (numb:enjs:format balance.u.ver))]
+          ['checked_at' ?~(ver ~ (numb:enjs:format (div (sub checked-at.u.ver ~1970.1.1) ~s1)))]
+      ==
+    :_  this
+    (weld khan-cards (give-json eyre-id resp))
   ::
   ::  command handler (shared by poke and http post)
   ::
@@ -617,7 +1043,7 @@
         %create-nym
       =/  id=nym-id  (sham [our.bowl now.bowl label.cmd])
       =/  seed=@ux  (shaz (jam [id now.bowl eny.bowl]))
-      =/  nym=pseudonym  [id label.cmd seed now.bowl]
+      =/  nym=pseudonym  [id label.cmd seed wallet.cmd now.bowl]
       =.  nyms.state  (~(put by nyms.state) id nym)
       :-  [(event-card [%nym-created nym])]~
       this
@@ -643,7 +1069,13 @@
     ::
         %retract-listing
       =.  listings.state  (~(del by listings.state) id.cmd)
-      :-  [(event-card [%listing-retracted id.cmd])]~
+      ::  broadcast retraction to all peers
+      =/  active-peers=(list @p)
+        %+  murn  ~(tap in peers.state)
+        |=(p=@p ?:(=(p our.bowl) ~ `p))
+      =/  peer-cards=(list card)
+        (turn active-peers |=(p=@p (gossip-card our.bowl p [%listing-retracted id.cmd])))
+      :-  (weld [(event-card [%listing-retracted id.cmd])]~ peer-cards)
       this
     ::
         %add-peer
@@ -677,13 +1109,22 @@
       =/  existing  (~(get by threads.state) tid)
       =/  thd=silk-thread
         ?^  existing
-          u.existing(messages [[%offer o] messages.u.existing], updated-at now.bowl)
-        [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] now.bowl now.bowl]
+          =/  nc=@ux  (advance-chain chain.u.existing %offer)
+          u.existing(thread-status %open, messages [[%offer o] messages.u.existing], chain nc, updated-at now.bowl)
+        =/  nc=@ux  (advance-chain `@ux`0 %offer)
+        [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] nc now.bowl now.bowl]
       =.  threads.state  (~(put by threads.state) tid thd)
+      ::  ensure buyer route is stored and sent to seller
+      =/  buyer-route=nym-route  [buyer.o our.bowl %silk-core]
+      =.  routes.state  (~(put by routes.state) buyer.o buyer-route)
       =/  route=(unit nym-route)  (~(get by routes.state) seller.o)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%offer o])]~
+        ?~  route
+          ~&  [%silk-warn %no-route-for-seller seller.o]
+          ~
+        :~  (skein-send-card our.bowl u.route [%offer o])
+            (skein-send-card our.bowl u.route [%catalog ~ [buyer-route]~])
+        ==
       :-  (weld [(event-card [%thread-opened thd])]~ send-cards)
       this
     ::
@@ -691,13 +1132,19 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.cmd)
       ?~  thd  `this
       =/  acc=accept  [thread-id.cmd offer-id.cmd now.bowl]
+      =/  nc=@ux  (advance-chain chain.u.thd %accept)
       =/  updated=silk-thread
-        u.thd(thread-status %accepted, messages [[%accept acc] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %accepted, messages [[%accept acc] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.cmd updated)
+      ::  send seller route alongside accept so buyer can reply
+      =/  seller-route=nym-route  [seller.u.thd our.bowl %silk-core]
+      =.  routes.state  (~(put by routes.state) seller.u.thd seller-route)
       =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
       =/  send-cards=(list card)
         ?~  route  ~
-        [(skein-send-card our.bowl u.route [%accept acc])]~
+        :~  (skein-send-card our.bowl u.route [%accept acc])
+            (skein-send-card our.bowl u.route [%catalog ~ [seller-route]~])
+        ==
       :-  (weld [(event-card [%thread-updated thread-id.cmd %accepted])]~ send-cards)
       this
     ::
@@ -705,8 +1152,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.cmd)
       ?~  thd  `this
       =/  rej=reject  [thread-id.cmd offer-id.cmd reason.cmd now.bowl]
+      =/  nc=@ux  (advance-chain chain.u.thd %reject)
       =/  updated=silk-thread
-        u.thd(thread-status %cancelled, messages [[%reject rej] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %cancelled, messages [[%reject rej] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.cmd updated)
       =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
       =/  send-cards=(list card)
@@ -719,8 +1167,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.invoice.cmd)
       ?~  thd  `this
       =/  inv=invoice  invoice.cmd
+      =/  nc=@ux  (advance-chain chain.u.thd %invoice)
       =/  updated=silk-thread
-        u.thd(messages [[%invoice inv] messages.u.thd], updated-at now.bowl)
+        u.thd(messages [[%invoice inv] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.inv updated)
       =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
       =/  send-cards=(list card)
@@ -733,8 +1182,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.payment-proof.cmd)
       ?~  thd  `this
       =/  pp=payment-proof  payment-proof.cmd
+      =/  nc=@ux  (advance-chain chain.u.thd %payment-proof)
       =/  updated=silk-thread
-        u.thd(thread-status %paid, messages [[%payment-proof pp] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %paid, messages [[%payment-proof pp] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.pp updated)
       =/  route=(unit nym-route)  (~(get by routes.state) seller.u.thd)
       =/  send-cards=(list card)
@@ -747,8 +1197,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.fulfillment.cmd)
       ?~  thd  `this
       =/  ful=fulfillment  fulfillment.cmd
+      =/  nc=@ux  (advance-chain chain.u.thd %fulfill)
       =/  updated=silk-thread
-        u.thd(thread-status %fulfilled, messages [[%fulfill ful] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %fulfilled, messages [[%fulfill ful] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.ful updated)
       =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
       =/  send-cards=(list card)
@@ -761,8 +1212,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.dispute.cmd)
       ?~  thd  `this
       =/  dis=dispute  dispute.cmd
+      =/  nc=@ux  (advance-chain chain.u.thd %dispute)
       =/  updated=silk-thread
-        u.thd(thread-status %disputed, messages [[%dispute dis] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %disputed, messages [[%dispute dis] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.dis updated)
       =/  counter=nym-id
         ?:  =(plaintiff.dis buyer.u.thd)
@@ -779,8 +1231,9 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.verdict.cmd)
       ?~  thd  `this
       =/  ver=verdict  verdict.cmd
+      =/  nc=@ux  (advance-chain chain.u.thd %verdict)
       =/  updated=silk-thread
-        u.thd(thread-status %resolved, messages [[%verdict ver] messages.u.thd], updated-at now.bowl)
+        u.thd(thread-status %resolved, messages [[%verdict ver] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.ver updated)
       :-  [(event-card [%thread-updated thread-id.ver %resolved])]~
       this
@@ -795,6 +1248,7 @@
     :~  ['id' s+(scot %uv id.n)]
         ['label' s+label.n]
         ['pubkey' s+(scot %ux pubkey.n)]
+        ['wallet' s+wallet.n]
         ['created_at' (numb:enjs:format (div (sub created-at.n ~1970.1.1) ~s1))]
     ==
   ::
@@ -802,15 +1256,27 @@
     |=  l=listing
     ^-  json
     =/  nym=(unit pseudonym)  (~(get by nyms.state) seller.l)
+    ::  compute seller reputation from attestations
+    =/  seller-rep=[total=@ud count=@ud]
+      =/  atts=(list attestation)  ~(val by attestations.state)
+      =/  acc=[total=@ud count=@ud]  [0 0]
+      |-
+      ?~  atts  acc
+      ?:  =(subject.i.atts seller.l)
+        $(atts t.atts, acc [(add total.acc score.i.atts) +(count.acc)])
+      $(atts t.atts)
     %-  pairs:enjs:format
     :~  ['id' s+(scot %uv id.l)]
         ['seller' s+(scot %uv seller.l)]
         ['seller_label' ?~(nym ~ s+label.u.nym)]
+        ['seller_wallet' ?~(nym ~ s+wallet.u.nym)]
         ['mine' b+?=(^ nym)]
         ['title' s+title.l]
         ['description' s+description.l]
         ['price' (numb:enjs:format price.l)]
         ['currency' s+currency.l]
+        ['seller_score' (numb:enjs:format ?:(=(0 count.seller-rep) 0 (div total.seller-rep count.seller-rep)))]
+        ['seller_reviews' (numb:enjs:format count.seller-rep)]
         ['created_at' (numb:enjs:format (div (sub created-at.l ~1970.1.1) ~s1))]
         :-  'expires_at'
         ?~  expires-at.l  ~
@@ -824,16 +1290,132 @@
       =/  off  (find-offer messages.t)
       ?~(off [0 %$] [amount.u.off currency.u.off])
     %-  pairs:enjs:format
+    =/  seller-nym=(unit pseudonym)  (~(get by nyms.state) seller.t)
+    =/  buyer-nym=(unit pseudonym)   (~(get by nyms.state) buyer.t)
     :~  ['id' s+(scot %uv id.t)]
         ['listing_id' s+(scot %uv listing-id.t)]
         ['buyer' s+(scot %uv buyer.t)]
         ['seller' s+(scot %uv seller.t)]
+        ['seller_wallet' ?~(seller-nym ~ s+wallet.u.seller-nym)]
+        ['buyer_wallet' ?~(buyer-nym ~ s+wallet.u.buyer-nym)]
         ['status' s+`@t`thread-status.t]
         ['message_count' (numb:enjs:format (lent messages.t))]
         ['amount' (numb:enjs:format amount.offer-data)]
         ['currency' s+`@t`cur.offer-data]
+        ['messages' [%a (turn (flop messages.t) message-to-json)]]
+        ['chain' s+(scot %ux chain.t)]
         ['started_at' (numb:enjs:format (div (sub started-at.t ~1970.1.1) ~s1))]
         ['updated_at' (numb:enjs:format (div (sub updated-at.t ~1970.1.1) ~s1))]
+        :-  'verification'
+        =/  ver=(unit [verified=? balance=@ud checked-at=@da])
+          (~(get by verifications.state) id.t)
+        ?~  ver  ~
+        %-  pairs:enjs:format
+        :~  ['verified' b+verified.u.ver]
+            ['balance' (numb:enjs:format balance.u.ver)]
+            ['checked_at' (numb:enjs:format (div (sub checked-at.u.ver ~1970.1.1) ~s1))]
+        ==
+    ==
+  ::
+  ++  message-to-json
+    |=  m=silk-message
+    ^-  json
+    ?+  -.m
+      (pairs:enjs:format ~[['type' s+`@t`-.m]])
+    ::
+        %offer
+      =/  o=offer  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'offer']
+          ['buyer' s+(scot %uv buyer.o)]
+          ['seller' s+(scot %uv seller.o)]
+          ['amount' (numb:enjs:format amount.o)]
+          ['currency' s+`@t`currency.o]
+          ['note' s+note.o]
+          ['at' (numb:enjs:format (div (sub offered-at.o ~1970.1.1) ~s1))]
+      ==
+    ::
+        %accept
+      =/  a=accept  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'accept']
+          ['at' (numb:enjs:format (div (sub accepted-at.a ~1970.1.1) ~s1))]
+      ==
+    ::
+        %reject
+      =/  r=reject  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'reject']
+          ['reason' s+reason.r]
+          ['at' (numb:enjs:format (div (sub rejected-at.r ~1970.1.1) ~s1))]
+      ==
+    ::
+        %invoice
+      =/  inv=invoice  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'invoice']
+          ['amount' (numb:enjs:format amount.inv)]
+          ['currency' s+`@t`currency.inv]
+          ['pay_address' s+pay-address.inv]
+          ['expires_at' (numb:enjs:format (div (sub expires-at.inv ~1970.1.1) ~s1))]
+      ==
+    ::
+        %payment-proof
+      =/  pp=payment-proof  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'payment-proof']
+          ['tx_hash' s+tx-hash.pp]
+          ['at' (numb:enjs:format (div (sub paid-at.pp ~1970.1.1) ~s1))]
+      ==
+    ::
+        %fulfill
+      =/  f=fulfillment  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'fulfill']
+          ['note' s+note.f]
+          ['at' (numb:enjs:format (div (sub fulfilled-at.f ~1970.1.1) ~s1))]
+      ==
+    ::
+        %complete
+      %-  pairs:enjs:format
+      :~  ['type' s+'complete']
+          ['at' (numb:enjs:format (div (sub completed-at.+.m ~1970.1.1) ~s1))]
+      ==
+    ::
+        %direct-message
+      %-  pairs:enjs:format
+      :~  ['type' s+'direct-message']
+          ['sender' s+(scot %uv sender.+.m)]
+          ['text' s+text.+.m]
+          ['at' (numb:enjs:format (div (sub sent-at.+.m ~1970.1.1) ~s1))]
+      ==
+    ::
+        %dispute
+      =/  d=dispute  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'dispute']
+          ['reason' s+reason.d]
+          ['at' (numb:enjs:format (div (sub filed-at.d ~1970.1.1) ~s1))]
+      ==
+    ::
+        %verdict
+      =/  v=verdict  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'verdict']
+          ['ruling' s+`@t`ruling.v]
+          ['note' s+note.v]
+          ['at' (numb:enjs:format (div (sub ruled-at.v ~1970.1.1) ~s1))]
+      ==
+    ::
+        %attest
+      =/  a=attestation  +.m
+      %-  pairs:enjs:format
+      :~  ['type' s+'attest']
+          ['subject' s+(scot %uv subject.a)]
+          ['score' (numb:enjs:format score.a)]
+          ['note' s+note.a]
+          ['at' (numb:enjs:format (div (sub issued-at.a ~1970.1.1) ~s1))]
+      ==
     ==
   --
 ::
@@ -896,6 +1478,43 @@
   ^-  (quip card _this)
   ?+  wire  (on-arvo:def wire sign)
       [%eyre *]
+    `this
+  ::
+      [%zenith-check @ ~]
+    =/  tid=@uv  (slav %uv i.t.wire)
+    ?.  ?=([%khan %arow *] sign)
+      ~&  [%silk-verify %unexpected-sign wire]
+      `this
+    ?:  ?=(%| -.p.sign)
+      ~&  [%silk-verify %thread-failed tid p.p.sign]
+      `this
+    ::  parse balance result: (list [denom=@t amount=@ud])
+    =/  bals=(list [denom=@t amount=@ud])
+      (^:((list [denom=@t amount=@ud])) q.p.p.sign)
+    ::  find sZ/znt balance
+    =/  bal=@ud
+      =/  items=(list [denom=@t amount=@ud])  bals
+      |-
+      ?~  items  0
+      ?:  |(=('znt' denom.i.items) =('sZ' denom.i.items) =('sz' denom.i.items))
+        amount.i.items
+      $(items t.items)
+    ::  look up invoice amount for this thread
+    =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+    =/  inv-amount=@ud
+      ?~  thd  0
+      =/  inv=(unit invoice)
+        =/  ms=(list silk-message)  messages.u.thd
+        |-
+        ?~  ms  ~
+        ?:  ?=(%invoice -.i.ms)  `+.i.ms
+        $(ms t.ms)
+      ?~(inv 0 amount.u.inv)
+    ::  verified if balance >= invoice amount
+    =/  verified=?  (gte bal inv-amount)
+    ~&  [%silk-verify tid %balance bal %required inv-amount %verified verified]
+    =.  verifications.state
+      (~(put by verifications.state) tid [verified bal now.bowl])
     `this
   ==
 ++  on-fail   on-fail:def

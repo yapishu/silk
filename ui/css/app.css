@@ -804,6 +804,14 @@ tr:hover td {
   opacity: 0.6;
 }
 
+.nym-card .nym-wallet {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  word-break: break-all;
+  margin-top: 4px;
+}
+
 .nym-card .nym-date {
   font-size: 12px;
   color: var(--text-muted);
@@ -985,4 +993,64 @@ tr:hover td {
   .page-content { padding: 16px; }
   .page-header { padding: 20px 16px 16px; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ============================================
+   thread messages
+   ============================================ */
+
+.thread-messages {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.msg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.msg-row.msg-mine {
+  background: var(--bg-hover);
+}
+
+.msg-type {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.msg-detail {
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* listing reputation badge */
+
+.listing-rep {
+  font-size: 11px;
+  color: var(--amber);
+  margin-left: 6px;
+}
+
+/* pagination */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 0;
+}
+
+.page-info {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
