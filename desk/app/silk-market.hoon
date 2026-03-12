@@ -73,6 +73,7 @@
     [%fulfilled %completed]  %.y
     [%fulfilled %disputed]   %.y
     [%disputed %resolved]    %.y
+    [%disputed %escrowed]    %.y    ::  dismissed dispute returns to escrowed
     [%completed %completed]  %.y
   ==
 ::
@@ -81,6 +82,8 @@
       [%advance thread-id=@uv to=order-status]
       [%set-escrow thread-id=@uv tx-hash=@ux]
       [%resolve-escrow thread-id=@uv =escrow-status]
+      [%resolve-dispute thread-id=@uv ruling=ruling-kind]
+      [%cancel-stale threshold=@dr]
   ==
 ::
 +$  market-event
@@ -89,6 +92,9 @@
       [%order-completed thread-id=@uv buyer=nym-id seller=nym-id]
       [%escrow-set thread-id=@uv tx-hash=@ux]
       [%escrow-resolved thread-id=@uv =escrow-status]
+      [%dispute-filed thread-id=@uv]
+      [%dispute-resolved thread-id=@uv ruling=ruling-kind]
+      [%stale-cancelled count=@ud]
       [%invalid-transition thread-id=@uv from=order-status to=order-status]
   ==
 ::
@@ -152,7 +158,7 @@
   ?+  mark  (on-poke:def mark vase)
       %noun
     ?>  =(our src):bowl
-    =/  cmd  !<(market-command vase)
+    =/  cmd=market-command  ;;(market-command q.vase)
     ?-  -.cmd
         %create-order
       =/  ord=order
@@ -179,16 +185,23 @@
         :-  [(event-card [%invalid-transition thread-id.cmd order-status.u.ord to.cmd])]~
         this
       =/  updated=order  u.ord(order-status to.cmd, updated-at now.bowl)
+      ::  auto-freeze escrow when dispute is filed
+      =?  updated  ?&(=(to.cmd %disputed) ?=(^ escrow.updated))
+        =/  frozen-esc=escrow-record  u.escrow.updated(escrow-status %disputed)
+        updated(escrow `frozen-esc)
       =.  orders.state  (~(put by orders.state) thread-id.cmd updated)
       =/  base-cards=(list card)
         :~  (event-card [%order-advanced thread-id.cmd order-status.u.ord to.cmd])
         ==
+      =/  dispute-cards=(list card)
+        ?.  =(to.cmd %disputed)  ~
+        [(event-card [%dispute-filed thread-id.cmd])]~
       ::  on completion, trigger reputation attestations
       =/  rep-cards=(list card)
         ?.  =(to.cmd %completed)  ~
         :-  (event-card [%order-completed thread-id.cmd buyer.u.ord seller.u.ord])
         (attest-completion updated our.bowl now.bowl eny.bowl)
-      [(weld base-cards rep-cards) this]
+      [(zing ~[base-cards dispute-cards rep-cards]) this]
     ::
         %set-escrow
       =/  ord=(unit order)  (~(get by orders.state) thread-id.cmd)
@@ -219,6 +232,62 @@
       =/  updated=order  u.ord(escrow `updated-esc, updated-at now.bowl)
       =.  orders.state  (~(put by orders.state) thread-id.cmd updated)
       :-  [(event-card [%escrow-resolved thread-id.cmd escrow-status.cmd])]~
+      this
+    ::
+        %resolve-dispute
+      =/  ord=(unit order)  (~(get by orders.state) thread-id.cmd)
+      ?~  ord  `this
+      ?.  =(order-status.u.ord %disputed)  `this
+      ::  resolve escrow based on ruling
+      =/  esc-status=escrow-status
+        ?-  ruling.cmd
+          %buyer-wins   %refunded
+          %seller-wins  %released
+          %split        %released   ::  split treated as release for now
+          %dismissed    %held       ::  return to held, order goes back to escrowed
+        ==
+      =/  updated-esc=(unit escrow-record)
+        ?~  escrow.u.ord  ~
+        `u.escrow.u.ord(escrow-status esc-status, resolved-at `now.bowl)
+      =/  new-status=order-status
+        ?:  =(ruling.cmd %dismissed)  %escrowed
+        %resolved
+      ?.  ?|  (valid-transition %disputed new-status)
+              =(ruling.cmd %dismissed)
+          ==
+        `this
+      =/  updated=order
+        u.ord(order-status new-status, escrow updated-esc, updated-at now.bowl)
+      =.  orders.state  (~(put by orders.state) thread-id.cmd updated)
+      =/  rep-cards=(list card)
+        ?.  =(ruling.cmd %dismissed)  ~
+        ~  ::  no rep changes on dismissal
+      :-  :~  (event-card [%dispute-resolved thread-id.cmd ruling.cmd])
+              (event-card [%order-advanced thread-id.cmd %disputed new-status])
+          ==
+      this
+    ::
+        %cancel-stale
+      ::  cancel orders stuck in non-terminal states past threshold
+      =/  cutoff=@da  (sub now.bowl threshold.cmd)
+      =/  stale=(list @uv)
+        %+  murn  ~(tap by orders.state)
+        |=  [tid=@uv ord=order]
+        ::  only cancel non-terminal orders updated before cutoff
+        ?.  ?=(?(%offered %accepted %invoiced) order-status.ord)  ~
+        ?.  (lth updated-at.ord cutoff)  ~
+        `tid
+      =/  count=@ud  (lent stale)
+      =.  orders.state
+        =/  os  orders.state
+        =/  sl  stale
+        |-
+        ?~  sl  os
+        =/  ord=(unit order)  (~(get by os) i.sl)
+        ?~  ord  $(sl t.sl)
+        $(sl t.sl, os (~(put by os) i.sl u.ord(order-status %cancelled, updated-at now.bowl)))
+      ?:  =(count 0)  `this
+      :-  [(event-card [%stale-cancelled count])]~
       this
     ==
   ==

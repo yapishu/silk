@@ -130,7 +130,7 @@
   ?+  mark  (on-poke:def mark vase)
       %noun
     ?>  =(our src):bowl
-    =/  cmd  !<(zenith-command vase)
+    =/  cmd=zenith-command  ;;(zenith-command q.vase)
     ?-  -.cmd
         %add-address
       =/  pa=pay-address  [address.cmd nym-id.cmd currency.cmd now.bowl %.n]
@@ -149,16 +149,28 @@
       ::  pick a fresh address for this seller nym
       =/  picked
         (pick-address seller-nym.cmd address-pool.state addresses.state)
-      =/  addr=@t
-        ?~  picked  'no-address-available'
-        address.u.picked
-      =?  address-pool.state  ?=(^ picked)  pool.u.picked
-      =?  addresses.state  ?=(^ picked)  addresses.u.picked
       =/  inv-id=invoice-id  (sham [thread-id.cmd now.bowl eny.bowl])
+      ?^  picked
+        ::  use pre-loaded pool address
+        =.  address-pool.state  pool.u.picked
+        =.  addresses.state  addresses.u.picked
+        =/  rec=payment-record
+          [inv-id thread-id.cmd amount.cmd currency.cmd address.u.picked ~ %pending now.bowl ~]
+        =.  payments.state  (~(put by payments.state) inv-id rec)
+        :-  [(event-card [%invoice-created rec])]~
+        this
+      ::  no pool address: generate a key and register with %zenith agent
+      =/  priv-key=@ux  `@ux`(shax (jam [inv-id now.bowl eny.bowl]))
+      =/  acc-name=@t  (scot %uv inv-id)
+      =/  zen-card=card
+        [%pass /zenith/add-account %agent [our.bowl %zenith] %poke %add-account !>([acc-name priv-key])]
+      ::  record with placeholder address — silk-core already sent invoice with seller's wallet
       =/  rec=payment-record
-        [inv-id thread-id.cmd amount.cmd currency.cmd addr ~ %pending now.bowl ~]
+        [inv-id thread-id.cmd amount.cmd currency.cmd 'pending-zenith-rotation' ~ %pending now.bowl ~]
       =.  payments.state  (~(put by payments.state) inv-id rec)
-      :-  [(event-card [%invoice-created rec])]~
+      :-  :~  (event-card [%invoice-created rec])
+              zen-card
+          ==
       this
     ::
         %record-payment

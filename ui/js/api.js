@@ -98,8 +98,11 @@ window.SilkAPI = {
     return res.json();
   },
 
-  getRelays()     { return this.skeinGet('relays'); },
-  getSkeinStats() { return this.skeinGet('stats'); },
+  getRelays()      { return this.skeinGet('relays'); },
+  getSkeinStats()  { return this.skeinGet('stats'); },
+  getSkeinHealth() { return this.skeinGet('health'); },
+  getSkeinTrusted(){ return this.skeinGet('trusted'); },
+  getSkeinChannels(){ return this.skeinGet('channels'); },
 
   discoverRelay(ship) {
     return this.skeinPost({ action: 'put-relay', ship });
@@ -109,5 +112,20 @@ window.SilkAPI = {
   },
   setMinHops(n) {
     return this.skeinPost({ action: 'set-min-hops', n });
+  },
+  addSeed(ship) {
+    return this.skeinPost({ action: 'add-seed', ship });
+  },
+  dropSeed(ship) {
+    return this.skeinPost({ action: 'drop-seed', ship });
+  },
+  setAdaptiveHops(on) {
+    return this.skeinPost({ action: 'set-adaptive-hops', on });
+  },
+  trustRelay(relay) {
+    return this.skeinPost({ action: 'trust-relay', relay });
+  },
+  untrustRelay(relay) {
+    return this.skeinPost({ action: 'untrust-relay', relay });
   },
 };

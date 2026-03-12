@@ -1054,3 +1054,42 @@ tr:hover td {
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
+
+/* ============================================
+   sub-grid (2-column layout)
+   ============================================ */
+
+.sub-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 960px) {
+  .sub-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================
+   mini stat rows (dashboard health panel)
+   ============================================ */
+
+.mini-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.mini-stat-row:last-child {
+  border-bottom: none;
+}
+
+.mini-label {
+  color: var(--text-dim);
+  font-size: 12px;
+}

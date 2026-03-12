@@ -15,10 +15,14 @@ const App = {
     stats: { nyms: 0, listings: 0, threads: 0, orders: 0, peers: 0 },
     relays: [],
     skeinStats: {},
+    skeinHealth: [],
+    skeinTrusted: [],
+    skeinChannels: {},
     loading: true,
     dialog: null,
     threadsPage: 0,
     ordersPage: 0,
+    apiErrors: [],
   },
 
   init() {
@@ -36,29 +40,56 @@ const App = {
 
   async refresh() {
     try {
-      const [nyms, listings, threads, orders, reputation, stats, peers, relays, skeinStats] = await Promise.allSettled([
-        SilkAPI.getNyms(),
-        SilkAPI.getListings(),
-        SilkAPI.getThreads(),
-        SilkAPI.getOrders(),
-        SilkAPI.getReputation(),
-        SilkAPI.getStats(),
-        SilkAPI.getPeers(),
-        SilkAPI.getRelays(),
-        SilkAPI.getSkeinStats(),
+      const results = await Promise.allSettled([
+        SilkAPI.getNyms(),        // 0
+        SilkAPI.getListings(),    // 1
+        SilkAPI.getThreads(),     // 2
+        SilkAPI.getOrders(),      // 3
+        SilkAPI.getReputation(),  // 4
+        SilkAPI.getStats(),       // 5
+        SilkAPI.getPeers(),       // 6
+        SilkAPI.getRelays(),      // 7
+        SilkAPI.getSkeinStats(),  // 8
+        SilkAPI.getSkeinHealth(), // 9
+        SilkAPI.getSkeinTrusted(),// 10
+        SilkAPI.getSkeinChannels(),// 11
       ]);
-      if (nyms.status === 'fulfilled')       this.state.nyms = nyms.value.nyms || [];
-      if (listings.status === 'fulfilled')    this.state.listings = listings.value.listings || [];
-      if (threads.status === 'fulfilled')     this.state.threads = threads.value.threads || [];
-      if (orders.status === 'fulfilled')      this.state.orders = orders.value.orders || [];
-      if (reputation.status === 'fulfilled') {
-        this.state.reputation = reputation.value.scores || [];
-        this.state.attestations = reputation.value.attestations || [];
+      const errors = [];
+      const get = (i) => {
+        if (results[i].status === 'fulfilled') return results[i].value;
+        errors.push(results[i].reason?.message || `API call ${i} failed`);
+        return null;
+      };
+      const nyms = get(0);
+      const listings = get(1);
+      const threads = get(2);
+      const orders = get(3);
+      const reputation = get(4);
+      const stats = get(5);
+      const peers = get(6);
+      const relays = get(7);
+      const skeinStats = get(8);
+      const skeinHealth = get(9);
+      const skeinTrusted = get(10);
+      const skeinChannels = get(11);
+
+      if (nyms)       this.state.nyms = nyms.nyms || [];
+      if (listings)   this.state.listings = listings.listings || [];
+      if (threads)    this.state.threads = threads.threads || [];
+      if (orders)     this.state.orders = orders.orders || [];
+      if (reputation) {
+        this.state.reputation = reputation.scores || [];
+        this.state.attestations = reputation.attestations || [];
       }
-      if (stats.status === 'fulfilled')       this.state.stats = stats.value;
-      if (peers.status === 'fulfilled')       this.state.peers = peers.value.peers || [];
-      if (relays.status === 'fulfilled')      this.state.relays = relays.value || [];
-      if (skeinStats.status === 'fulfilled')  this.state.skeinStats = skeinStats.value || {};
+      if (stats)         this.state.stats = stats;
+      if (peers)         this.state.peers = peers.peers || [];
+      if (relays)        this.state.relays = relays || [];
+      if (skeinStats)    this.state.skeinStats = skeinStats || {};
+      if (skeinHealth)   this.state.skeinHealth = skeinHealth || [];
+      if (skeinTrusted)  this.state.skeinTrusted = skeinTrusted || [];
+      if (skeinChannels) this.state.skeinChannels = skeinChannels || {};
+      this.state.apiErrors = errors;
+      if (errors.length) console.warn('silk: API errors:', errors);
     } catch (e) {
       console.error('refresh failed:', e);
     }
@@ -183,13 +214,20 @@ const App = {
 
   renderDashboard() {
     const s = this.state.stats;
+    const sk = this.state.skeinStats;
     const recentThreads = this.state.threads.slice(0, 5);
+    const errors = this.state.apiErrors || [];
     return `
       <div class="page-header">
         <h2>Dashboard</h2>
         <div class="page-desc">Overview of your marketplace activity</div>
       </div>
       <div class="page-content">
+        ${errors.length ? `
+          <div class="alert alert-warn" style="margin-bottom: 16px;">
+            API issues: ${errors.map(e => this.esc(e)).join(', ')}
+          </div>
+        ` : ''}
         <div class="stat-grid">
           <div class="stat-card">
             <div class="stat-label">Identities</div>
@@ -207,35 +245,94 @@ const App = {
             <div class="stat-label">Peers</div>
             <div class="stat-value">${s.peers || 0}</div>
           </div>
-        </div>
-        <div class="table-wrap">
-          <div class="table-header">
-            <div class="table-title">Recent Threads</div>
+          <div class="stat-card">
+            <div class="stat-label">Relays</div>
+            <div class="stat-value">${sk.relays || 0}</div>
           </div>
-          ${recentThreads.length ? `
-            <table>
-              <thead>
-                <tr>
-                  <th>Thread</th>
-                  <th>Status</th>
-                  <th>Buyer</th>
-                  <th>Seller</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${recentThreads.map(t => `
+          <div class="stat-card">
+            <div class="stat-label">Trusted</div>
+            <div class="stat-value">${sk.trustedRelays || 0}</div>
+          </div>
+        </div>
+
+        <div class="sub-grid">
+          <div class="table-wrap">
+            <div class="table-header">
+              <div class="table-title">Recent Threads</div>
+            </div>
+            ${recentThreads.length ? `
+              <table>
+                <thead>
                   <tr>
-                    <td class="mono truncate">${this.shortId(t.id)}</td>
-                    <td><span class="badge badge-${t.status}">${t.status}</span></td>
-                    <td class="mono truncate">${this.shortId(t.buyer)}</td>
-                    <td class="mono truncate">${this.shortId(t.seller)}</td>
-                    <td class="mono">${this.fmtDate(t.updated_at)}</td>
+                    <th>Thread</th>
+                    <th>Status</th>
+                    <th>Buyer</th>
+                    <th>Seller</th>
+                    <th>Updated</th>
                   </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          ` : '<div class="empty-state"><div class="empty-text">No threads yet</div></div>'}
+                </thead>
+                <tbody>
+                  ${recentThreads.map(t => `
+                    <tr>
+                      <td class="mono truncate">${this.shortId(t.id)}</td>
+                      <td><span class="badge badge-${t.status}">${t.status}</span></td>
+                      <td class="mono truncate">${this.shortId(t.buyer)}</td>
+                      <td class="mono truncate">${this.shortId(t.seller)}</td>
+                      <td class="mono">${this.fmtDate(t.updated_at)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            ` : '<div class="empty-state"><div class="empty-text">No threads yet</div></div>'}
+          </div>
+
+          <div class="table-wrap">
+            <div class="table-header">
+              <div class="table-title">Skein Health</div>
+            </div>
+            <div style="padding: 16px 20px;">
+              <div class="mini-stat-row">
+                <span class="mini-label">Ship</span>
+                <span class="mono">${this.esc(sk.ship || '?')}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Bound Apps</span>
+                <span>${sk.apps || 0}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Routes Used</span>
+                <span>${sk.routes || 0}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Seen Cells</span>
+                <span>${sk.seen || 0}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Pending Retries</span>
+                <span>${sk.pendingRetries || 0}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Reply Tokens</span>
+                <span>${sk.replyTokens || 0}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Channels</span>
+                <span>${sk.channels || 0} / ${sk.ourChannels || 0} ours</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Min Hops</span>
+                <span>${sk.minHops || 0}${sk.adaptiveHops ? ` (effective: ${sk.effectiveMinHops || 0})` : ''}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Adaptive Hops</span>
+                <span style="color: ${sk.adaptiveHops ? 'var(--green)' : 'var(--text-muted)'};">${sk.adaptiveHops ? 'on' : 'off'}</span>
+              </div>
+              <div class="mini-stat-row">
+                <span class="mini-label">Batch Timer</span>
+                <span style="color: ${sk.hasTimer ? 'var(--green)' : 'var(--text-muted)'};">${sk.hasTimer ? 'active' : 'idle'}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -259,7 +356,10 @@ const App = {
               <div class="nym-card">
                 <div class="nym-label">${this.esc(n.label)}</div>
                 <div class="nym-id">id: ${n.id}</div>
-                <div class="nym-key">key: ${this.shortId(n.pubkey)}</div>
+                <div class="nym-key">
+                  key: ${this.shortId(n.pubkey)}
+                  ${n.has_signing_key ? '<span class="badge badge-accepted" style="font-size:9px; margin-left:6px;">ed25519</span>' : ''}
+                </div>
                 <div class="nym-wallet">${n.wallet ? `wallet: ${n.wallet}` : 'no wallet set'}</div>
                 <div class="nym-date">created ${this.fmtDate(n.created_at)}</div>
                 <div class="nym-actions">
@@ -378,6 +478,7 @@ const App = {
                 <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid var(--border-dim);">
                   <div style="font-size: 12px; color: var(--text-muted);">
                     ${t.amount ? this.fmtPrice(t.amount) + ' &middot; ' : ''}${t.message_count} message${t.message_count !== 1 ? 's' : ''} &middot; ${this.fmtDate(t.updated_at)}
+                    ${t.chain ? ` &middot; chain: ${this.shortId(t.chain)}` : ''}
                   </div>
                   <div style="display: flex; gap: 8px;">
                     ${t.status === 'open' && isSeller ? `
@@ -413,14 +514,12 @@ const App = {
 
   renderMessage(m, myNymIds) {
     const isMine = m.sender && myNymIds.has(m.sender);
-    // for non-DM messages, infer direction from type: buyer-initiated vs seller-initiated
     const buyerActions = new Set(['offer', 'payment-proof', 'complete']);
     const sellerActions = new Set(['accept', 'reject', 'invoice', 'fulfill']);
     let direction = '';
     if (m.type === 'direct-message') {
       direction = isMine ? 'sent' : 'received';
     } else if (buyerActions.has(m.type) || sellerActions.has(m.type)) {
-      // determine if we're likely the actor
       direction = (buyerActions.has(m.type) && [...myNymIds].some(id => m.buyer === id))
         || (sellerActions.has(m.type) && [...myNymIds].some(id => m.seller === id))
         ? 'sent' : 'received';
@@ -437,17 +536,19 @@ const App = {
       'dispute': 'Dispute',
       'verdict': 'Verdict',
       'attest': 'Feedback',
+      'ack': 'Ack',
     };
     const label = typeLabels[m.type] || m.type;
     let detail = '';
     if (m.type === 'offer') detail = `${m.amount} sZ${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
-    else if (m.type === 'invoice') detail = `${m.amount} sZ \u2192 ${this.esc(m.pay_address)}`;
+    else if (m.type === 'invoice') detail = `${m.amount} sZ \u2192 ${this.esc(m.pay_address || 'pending...')}`;
     else if (m.type === 'payment-proof') detail = `tx: ${this.esc(m.tx_hash)}`;
     else if (m.type === 'fulfill' && m.note) detail = this.esc(m.note);
     else if (m.type === 'direct-message') detail = this.esc(m.text);
     else if (m.type === 'reject' && m.reason) detail = this.esc(m.reason);
     else if (m.type === 'dispute' && m.reason) detail = this.esc(m.reason);
     else if (m.type === 'attest') detail = `${m.score}/100${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
+    else if (m.type === 'verdict') detail = `${m.ruling}${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
 
     const dirIcon = direction === 'sent' ? '\u2191 ' : direction === 'received' ? '\u2193 ' : '';
     return `
@@ -461,16 +562,15 @@ const App = {
   // ---- orders ----
 
   orderStep(o) {
-    // virtual 5-step: accepted → invoiced → paid → fulfilled → completed
-    if (o.status === 'completed') return 4;
-    if (o.status === 'fulfilled') return 3;
+    if (o.status === 'completed') return 5;
+    if (o.status === 'fulfilled') return 4;
+    if (o.status === 'escrowed') return 3;
     if (o.status === 'paid') return 2;
     if (o.status === 'accepted' && o.has_invoice) return 1;
-    return 0; // accepted, no invoice yet
+    return 0;
   },
 
   orderAction(o, role) {
-    // exactly one party acts per state, the other waits
     const tid = o.thread_id;
     const s = o.status;
     const inv = o.has_invoice;
@@ -482,13 +582,17 @@ const App = {
     if (s === 'accepted' && inv) {
       if (role === 'buyer') return {
         btn: `<button class="btn btn-sm btn-primary" data-action="open-submit-payment" data-thread-id="${tid}">Submit Payment</button>`,
-        wait: o.pay_address ? `Pay to: <span class="mono">${this.esc(o.pay_address)}</span>` : '',
+        wait: o.pay_address ? `Pay to: <span class="mono">${this.esc(o.pay_address)}</span>` : 'Invoice sent \u2014 awaiting zenith address...',
       };
       return { btn: '', wait: 'Invoice sent \u2014 waiting for payment' };
     }
     if (s === 'paid') {
       if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>`, wait: '' };
       return { btn: '', wait: 'Payment submitted \u2014 waiting for delivery' };
+    }
+    if (s === 'escrowed') {
+      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>`, wait: 'Payment escrowed' };
+      return { btn: '', wait: 'Payment escrowed \u2014 waiting for delivery' };
     }
     if (s === 'fulfilled') {
       if (role === 'buyer') return {
@@ -502,12 +606,13 @@ const App = {
       wait: 'Order complete',
     };
     if (s === 'disputed') return { btn: '', wait: 'Dispute in progress' };
+    if (s === 'resolved') return { btn: '', wait: 'Dispute resolved' };
     if (s === 'cancelled') return { btn: '', wait: 'Cancelled' };
     return { btn: '', wait: '' };
   },
 
   renderOrders() {
-    const STEPS = ['accepted','invoiced','paid','fulfilled','completed'];
+    const STEPS = ['accepted','invoiced','paid','escrowed','fulfilled','completed'];
     const myNymIds = new Set(this.state.nyms.map(n => n.id));
     const PAGE = 10;
     const page = this.state.ordersPage || 0;
@@ -544,6 +649,7 @@ const App = {
                     </div>
                     <span class="badge badge-${o.status}">${o.status}${o.status === 'accepted' && o.has_invoice ? ' (invoiced)' : ''}</span>
                   </div>
+                  ${!['disputed','resolved','cancelled'].includes(o.status) ? `
                   <div class="order-timeline">
                     ${STEPS.map((step, i) => {
                       const reached = i <= stepIdx;
@@ -563,12 +669,21 @@ const App = {
                       `;
                     }).join('')}
                   </div>
+                  ` : ''}
                   ${(o.messages && o.messages.length) ? `
                     <div class="thread-messages" style="margin-top: 12px;">
                       ${o.messages.map(m => this.renderMessage(m, myNymIds)).join('')}
                     </div>
                   ` : ''}
-                  ${o.seller_wallet ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Seller wallet: <span class="mono">${o.seller_wallet}</span></div>` : ''}
+                  ${o.escrow ? `
+                    <div style="margin-top: 8px; padding: 10px; border-radius: var(--radius); background: var(--purple-dim); border: 1px solid rgba(139,92,246,0.2); font-size: 12px;">
+                      <strong style="color: var(--purple);">Escrow:</strong>
+                      <span style="color: var(--text);">${o.escrow.status}</span>
+                      ${o.escrow.tx_hash ? ` &middot; tx: <span class="mono">${this.shortId(o.escrow.tx_hash)}</span>` : ''}
+                      ${o.escrow.amount ? ` &middot; ${o.escrow.amount} ${o.escrow.currency || 'sZ'}` : ''}
+                    </div>
+                  ` : ''}
+                  ${o.seller_wallet ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Seller wallet: <span class="mono">${this.esc(o.seller_wallet)}</span></div>` : ''}
                   ${o.verification ? `
                     <div style="margin-top: 8px; padding: 8px; border-radius: var(--radius); font-size: 12px; background: ${o.verification.verified ? 'rgba(76,175,80,0.1)' : 'rgba(233,69,96,0.1)'}; border: 1px solid ${o.verification.verified ? 'rgba(76,175,80,0.3)' : 'rgba(233,69,96,0.3)'};">
                       ${o.verification.verified ? '\u2713 Payment verified' : '\u2717 Payment NOT verified'} &mdash; Seller balance: ${o.verification.balance} sZ (checked ${this.fmtDate(o.verification.checked_at)})
@@ -579,7 +694,7 @@ const App = {
                       ${wait}
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                      ${['paid','fulfilled','completed'].includes(o.status) ? `<button class="btn btn-sm btn-ghost" data-action="verify-payment" data-thread-id="${o.thread_id || o.id}">Verify on Zenith</button>` : ''}
+                      ${['paid','escrowed','fulfilled','completed'].includes(o.status) ? `<button class="btn btn-sm btn-ghost" data-action="verify-payment" data-thread-id="${o.thread_id || o.id}">Verify on Zenith</button>` : ''}
                       ${btn}
                     </div>
                   </div>
@@ -609,7 +724,6 @@ const App = {
   renderReputation() {
     const scores = this.state.reputation || [];
     const attestations = this.state.attestations || [];
-    // find nym labels for display
     const nymLabel = (id) => {
       const n = this.state.nyms.find(n => n.id === id);
       return n ? this.esc(n.label) : this.shortId(id);
@@ -642,7 +756,7 @@ const App = {
               <div class="table-title">Recent Attestations</div>
             </div>
             <table>
-              <thead><tr><th>Subject</th><th>Issuer</th><th>Kind</th><th>Score</th><th>Note</th><th>Date</th></tr></thead>
+              <thead><tr><th>Subject</th><th>Issuer</th><th>Kind</th><th>Score</th><th>Note</th><th>Sig</th><th>Date</th></tr></thead>
               <tbody>
                 ${attestations.map(a => `
                   <tr>
@@ -651,6 +765,7 @@ const App = {
                     <td>${a.kind}</td>
                     <td>${a.score}/100</td>
                     <td>${this.esc(a.note)}</td>
+                    <td>${a.sig && a.sig !== '0x0' ? '<span style="color:var(--green);" title="signed">\u2713</span>' : '<span style="color:var(--text-muted);">\u2014</span>'}</td>
                     <td class="mono">${this.fmtDate(a.issued_at)}</td>
                   </tr>
                 `).join('')}
@@ -668,6 +783,8 @@ const App = {
     const relays = this.state.relays;
     const sk = this.state.skeinStats;
     const peers = this.state.peers;
+    const trusted = this.state.skeinTrusted || [];
+    const trustedSet = new Set(Array.isArray(trusted) ? trusted : []);
     return `
       <div class="page-header">
         <h2>Network</h2>
@@ -680,42 +797,70 @@ const App = {
             <div class="stat-value">${sk.relays || 0}</div>
           </div>
           <div class="stat-card">
+            <div class="stat-label">Trusted</div>
+            <div class="stat-value">${sk.trustedRelays || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Healthy</div>
+            <div class="stat-value">${sk.healthyRelays || 0}</div>
+          </div>
+          <div class="stat-card">
             <div class="stat-label">Peers</div>
             <div class="stat-value">${peers.length}</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Routes</div>
-            <div class="stat-value">${sk.routes || 0}</div>
+            <div class="stat-label">Seeds</div>
+            <div class="stat-value">${sk.seeds || 0}</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Seen</div>
-            <div class="stat-value">${sk.seen || 0}</div>
+            <div class="stat-label">Retries</div>
+            <div class="stat-value">${sk.pendingRetries || 0}</div>
           </div>
         </div>
 
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-label">Minimum Relay Hops</div>
-            <div class="setting-desc">
-              Number of intermediate relays before the final hop. Higher values increase privacy but require more online relays.
+        <div class="sub-grid" style="margin-bottom: 16px;">
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Minimum Relay Hops</div>
+              <div class="setting-desc">
+                Intermediate relays before the final hop. ${sk.adaptiveHops ? `Effective: ${sk.effectiveMinHops || 0}` : 'Adaptive mode off'}
+              </div>
+            </div>
+            <div class="setting-control">
+              <button class="btn btn-sm" data-action="dec-min-hops" ${(sk.minHops || 0) === 0 ? 'disabled' : ''}>-</button>
+              <span class="setting-value">${sk.minHops || 0}</span>
+              <button class="btn btn-sm" data-action="inc-min-hops">+</button>
             </div>
           </div>
-          <div class="setting-control">
-            <button class="btn btn-sm" data-action="dec-min-hops" ${(sk.minHops || 0) === 0 ? 'disabled' : ''}>-</button>
-            <span class="setting-value">${sk.minHops || 0}</span>
-            <button class="btn btn-sm" data-action="inc-min-hops">+</button>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Adaptive Hops</div>
+              <div class="setting-desc">
+                Auto-scale min hops based on relay pool size
+              </div>
+            </div>
+            <div class="setting-control">
+              <button class="btn btn-sm ${sk.adaptiveHops ? 'btn-primary' : ''}" data-action="toggle-adaptive-hops">
+                ${sk.adaptiveHops ? 'On' : 'Off'}
+              </button>
+            </div>
           </div>
         </div>
+
         ${(sk.minHops || 0) > 0 && (sk.relays || 0) <= (sk.minHops || 0) ? `
           <div class="alert alert-warn">
             Not enough relays to satisfy min-hops=${sk.minHops}. Messages may fail to route. Add more relays or reduce min-hops.
           </div>
         ` : ''}
 
-        <div class="table-wrap">
+        <div class="table-wrap" style="margin-bottom: 16px;">
           <div class="table-header">
             <div class="table-title">Marketplace Peers</div>
-            <button class="btn btn-primary btn-sm" data-action="open-add-peer">+ Add Peer</button>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-sm" data-action="sync-catalog">Sync</button>
+              <button class="btn btn-primary btn-sm" data-action="open-add-peer">+ Add Peer</button>
+            </div>
           </div>
           ${peers.length ? `
             <table>
@@ -737,31 +882,37 @@ const App = {
               </tbody>
             </table>
           ` : `
-            <div class="empty-state">
-              <div class="empty-icon">\u2B21</div>
-              <div class="empty-text">No marketplace peers. Add peers to share listings.</div>
+            <div class="empty-state" style="padding: 30px 20px;">
+              <div class="empty-text">No marketplace peers. Add peers or join the silk-market channel to auto-discover.</div>
             </div>
           `}
         </div>
 
-        <div class="table-wrap">
+        <div class="table-wrap" style="margin-bottom: 16px;">
           <div class="table-header">
             <div class="table-title">Relay Descriptors</div>
             <button class="btn btn-primary btn-sm" data-action="open-discover-relay">+ Discover Relay</button>
           </div>
-          ${this.renderRelayTable(relays)}
+          ${this.renderRelayTable(relays, trustedSet)}
+        </div>
+
+        <div class="table-wrap">
+          <div class="table-header">
+            <div class="table-title">Seeds</div>
+            <button class="btn btn-primary btn-sm" data-action="open-add-seed">+ Add Seed</button>
+          </div>
+          ${this.renderSeedsInfo(sk)}
         </div>
       </div>
     `;
   },
 
-  renderRelayTable(relays) {
+  renderRelayTable(relays, trustedSet) {
     const entries = Array.isArray(relays) ? relays : [];
     if (!entries.length) {
       return `
-        <div class="empty-state">
-          <div class="empty-icon">\u2B21</div>
-          <div class="empty-text">No relays configured</div>
+        <div class="empty-state" style="padding: 30px 20px;">
+          <div class="empty-text">No relays configured. Discover relays from known ships.</div>
         </div>
       `;
     }
@@ -772,22 +923,49 @@ const App = {
             <th>Name</th>
             <th>Ship</th>
             <th>Weight</th>
+            <th>Trust</th>
+            <th>Expiry</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          ${entries.map(r => `
+          ${entries.map(r => {
+            const isTrusted = trustedSet.has(r.relay);
+            return `
             <tr>
               <td class="mono">${this.esc(r.relay)}</td>
               <td class="mono">${this.esc(r.ship)}</td>
               <td>${r.weight || 1}</td>
+              <td>
+                <button class="btn btn-sm ${isTrusted ? 'btn-primary' : 'btn-ghost'}" data-action="toggle-trust-relay" data-relay="${this.esc(r.relay)}" data-trusted="${isTrusted}">
+                  ${isTrusted ? '\u2605 trusted' : 'trust'}
+                </button>
+              </td>
+              <td class="mono" style="font-size: 11px; color: var(--text-muted);">${r.expiry || '\u2014'}</td>
               <td style="text-align: right;">
                 <button class="btn btn-sm btn-ghost" data-action="drop-relay" data-relay="${this.esc(r.relay)}">remove</button>
               </td>
             </tr>
-          `).join('')}
+            `;
+          }).join('')}
         </tbody>
       </table>
+    `;
+  },
+
+  renderSeedsInfo(sk) {
+    const seedCount = sk.seeds || 0;
+    if (!seedCount) {
+      return `
+        <div class="empty-state" style="padding: 30px 20px;">
+          <div class="empty-text">No seed ships. Seeds bootstrap relay discovery.</div>
+        </div>
+      `;
+    }
+    return `
+      <div style="padding: 16px 20px; font-size: 13px; color: var(--text);">
+        ${seedCount} seed ship${seedCount !== 1 ? 's' : ''} configured for relay discovery.
+      </div>
     `;
   },
 
@@ -801,6 +979,9 @@ const App = {
     if (name === 'create-nym') {
       content = `
         <h3>Create Identity</h3>
+        <div style="margin-bottom: 12px; font-size: 13px; color: var(--text-muted);">
+          Creates a pseudonym with an Ed25519 signing keypair for attestation signatures.
+        </div>
         <div class="form-group">
           <label>Label</label>
           <input type="text" id="nym-label" placeholder="my-vendor-name" autofocus>
@@ -895,7 +1076,7 @@ const App = {
       content = `
         <h3>Send Invoice</h3>
         <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
-          Invoice the buyer for this order. Payment address will be derived from your identity's wallet.
+          Invoice the buyer for this order. A rotated payment address will be assigned by Zenith.
         </div>
         <input type="hidden" id="invoice-thread-id" value="${data.threadId || ''}">
         <div class="form-actions">
@@ -991,7 +1172,6 @@ const App = {
     }
 
     if (name === 'leave-feedback') {
-      // auto-detect the user's nym in this order
       const order = this.state.orders.find(o => o.thread_id === data.threadId)
         || this.state.threads.find(t => t.id === data.threadId);
       const myNymIds = new Set(this.state.nyms.map(n => n.id));
@@ -1011,6 +1191,7 @@ const App = {
         <h3>Leave Feedback</h3>
         <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
           Rate the ${counterLabel}${nymObj ? ` as <strong style="color:var(--text-bright);">${this.esc(nymObj.label)}</strong>` : ''}.
+          Attestation will be signed with your nym's Ed25519 key.
         </div>
         <div class="form-group">
           <label>Score (0-100)</label>
@@ -1042,6 +1223,23 @@ const App = {
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
           <button class="btn btn-primary" data-action="submit-discover-relay">Discover</button>
+        </div>
+      `;
+    }
+
+    if (name === 'add-seed') {
+      content = `
+        <h3>Add Seed Ship</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Seed ships bootstrap relay discovery. Skein will subscribe to them for relay gossip.
+        </div>
+        <div class="form-group">
+          <label>Ship</label>
+          <input type="text" id="seed-ship" placeholder="~sampel-palnet" autofocus>
+        </div>
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-add-seed">Add Seed</button>
         </div>
       `;
     }
@@ -1149,8 +1347,8 @@ const App = {
             this.action(async () => {
               const res = await SilkAPI.verifyPayment(el.dataset.threadId);
               if (res.verified === true) this.toast('Payment verified on Zenith', 'success');
-              else if (res.verified === false) this.toast('Payment NOT verified — balance too low', 'error');
-              else this.toast('Verification queued — refresh in a moment', '');
+              else if (res.verified === false) this.toast('Payment NOT verified \u2014 balance too low', 'error');
+              else this.toast('Verification queued \u2014 refresh in a moment', '');
             });
             break;
           case 'open-send-message':
@@ -1206,6 +1404,13 @@ const App = {
               this.action(() => SilkAPI.dropRelay(el.dataset.relay));
             }
             break;
+          case 'toggle-trust-relay':
+            {
+              const relay = el.dataset.relay;
+              const isTrusted = el.dataset.trusted === 'true';
+              this.action(() => isTrusted ? SilkAPI.untrustRelay(relay) : SilkAPI.trustRelay(relay));
+            }
+            break;
           case 'inc-min-hops':
             this.action(() => SilkAPI.setMinHops((this.state.skeinStats.minHops || 0) + 1));
             break;
@@ -1214,6 +1419,15 @@ const App = {
               const cur = this.state.skeinStats.minHops || 0;
               if (cur > 0) this.action(() => SilkAPI.setMinHops(cur - 1));
             }
+            break;
+          case 'toggle-adaptive-hops':
+            this.action(() => SilkAPI.setAdaptiveHops(!this.state.skeinStats.adaptiveHops));
+            break;
+          case 'open-add-seed':
+            this.openDialog('add-seed');
+            break;
+          case 'submit-add-seed':
+            this.action(() => SilkAPI.addSeed(document.getElementById('seed-ship').value));
             break;
           case 'threads-prev':
             this.state.threadsPage = Math.max(0, (this.state.threadsPage || 0) - 1);

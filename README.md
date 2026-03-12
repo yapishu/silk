@@ -1,267 +1,283 @@
 # silk
 
-Private commerce on Urbit. Buyers and sellers trade under pseudonyms, negotiate through encrypted message threads relayed via a mixnet, and settle payments through rotating addresses. No direct ship-to-ship communication -- all inter-ship messaging flows through `%skein` as opaque jammed payloads.
+`%silk` is a decentralized marketplace protocol built on top of `../skein`. It separates transport identity, market pseudonyms, and payment identity, and it routes all peer traffic over `%skein` rather than direct ship-to-ship pokes.
 
-For detailed design rationale, see [docs/silk-architecture.md](docs/silk-architecture.md).
+For design intent and threat-model notes, see [docs/silk-architecture.md](docs/silk-architecture.md). That document is still partly aspirational. This README is a description of the code as it exists now.
 
-## Overview
+## Current Status
 
-Silk separates three layers of identity:
+Implemented today:
 
-- **Ship** (transport) -- your Urbit identity, used only by `%skein` for relay routing. Never exposed to counterparties.
-- **Pseudonym** (market) -- a `@uv` + label persona used for listings, offers, and reputation. Decoupled from ship identity.
-- **Payment address** (settlement) -- rotated per-invoice so transactions can't be linked across trades.
+- pseudonyms with labels, stored pubkey fields, and wallet strings
+- listing publication and listing retraction
+- marketplace peer management and catalog sync over `%skein`
+- direct messages, offers, accepts, rejects, invoices, payment proofs, fulfillment messages, completion, disputes, verdicts, and feedback messages
+- per-thread hash chains plus `sync-thread` / `sync-thread-response` reconciliation messages
+- HTTP JSON API for the frontend
+- a complete browser UI for identities, listings, threads, orders, reputation, and network management
+- local reputation storage and simple aggregate scoring
+- Zenith balance checks through `%khan`
 
-The system spans two Urbit desks:
+Partially implemented but not yet authoritative in the live flow:
 
-- **`%skein`** -- content-agnostic mixnet transport (separate repo at `../skein/`)
-- **`%silk`** -- private commerce protocol built on top of `%skein`
+- `%silk-market` has an order state machine, but `%silk-core` does not currently drive commerce through it
+- `%silk-zenith` has address-pool and payment-record scaffolding, but the main invoice flow still derives the pay address directly from the seller nym wallet
+- pseudonym and attestation crypto fields exist, but signatures are placeholders and are not verified
 
-## %skein -- Mixnet Transport
+The practical result is that `%silk-core` currently carries most of the live application flow, while `%silk-market` and `%silk-zenith` are real sidecars that still need to be wired in as authoritative components.
 
-Generalized multi-hop relay network. Silk uses it as an opaque transport layer, but any application can bind to it.
+## System Split
 
-**Agent:** `skein.hoon` (~998 lines)
-**Types:** `sur/skein.hoon`, `sur/skein-crypto.hoon`
-**Marks:** `skein-send`, `skein-event`, `skein-admin`, `skein-cell`
+Silk is intentionally split across two desks:
 
-### Concepts
+- `../skein`: content-agnostic transport, routing, relay discovery, and delivery
+- `%silk`: marketplace semantics, pseudonyms, listings, negotiation, payment coordination, and reputation
 
-- **Endpoint** -- a `(ship, app-id)` pair. Apps bind to skein to send/receive.
-- **Relay descriptor** -- a node in the relay network, identified by `relay-id`, carrying a ship, optional encryption key, weight, delay, and expiry.
-- **Route** -- an ordered list of relay hops with per-hop encryption keys and optional delays.
-- **Cell** -- an in-flight message with layered encrypted headers, routed hop-by-hop through the network.
-- **Reply block** -- a pre-built return path (token + encrypted header + body) for anonymous replies.
+Silk also separates three identities:
 
-### Features
+- `ship`: the Urbit transport identity used by `%skein`
+- `pseudonym`: the market-facing `nym-id`
+- `wallet` / payment address: the settlement-side identifier currently stored on the nym and echoed into invoices
 
-- App bind/unbind via admin pokes
-- Multi-hop routing with layered encrypted headers (onion-style)
-- Replay detection with time-based pruning (~h1 TTL)
-- Epoch batching (~s30 timer) to prevent timing correlation
-- Relay descriptor management (add, remove, weight-based selection)
-- Route diversity policy (min 2 hops, avoids reusing recent relay sets)
-- Route logging capped at 100 entries
-- Cover traffic generation
-- Loopback delivery for same-ship messages
+## Agents
 
-### Admin Actions
+### `%silk-core`
 
-| Action | Description |
-|--------|-------------|
-| `%bind` | Register an app to send/receive through skein |
-| `%unbind` | Deregister an app |
-| `%clear` | Flush queued messages for an app |
-| `%put-relay` | Add or update a relay descriptor |
-| `%drop-relay` | Remove a relay |
-| `%clear-seen` | Purge the replay detection cache |
+`desk/app/silk-core.hoon` is the live hub today.
 
-### State (state-3)
+It owns:
 
-- `apps` -- bound application registrations and queues
-- `relays` -- known relay descriptors
-- `seen` -- `(map relay-step @da)` for replay detection
-- `recent-routes` -- last 100 route selections
-- `mix` -- epoch batching state (timer, pending cells)
+- pseudonyms
+- listings
+- peer ships
+- route mappings from `nym-id` to `%skein` endpoints
+- thread state and message logs
+- local attestation cache
+- Zenith verification snapshots
+- the JSON API at `/apps/silk/api`
+- the `/events` fact stream used by the UI
 
-## %silk -- Private Commerce
+This is the agent that currently drives the end-to-end user flow.
 
-Four agents handle the commerce protocol. All inter-ship communication is routed through `%skein` -- agents never poke remote ships directly.
+### `%silk-market`
 
-### Agents
+`desk/app/silk-market.hoon` implements a separate order state machine with:
 
-**`silk-core.hoon`** (517 lines) -- Protocol hub. Manages pseudonyms, listings, negotiation threads, and route mappings. Serves the HTTP JSON API at `/apps/silk/api/`. Dispatches protocol messages to/from `%skein`. Publishes `%silk-event` facts on `/events` for UI subscriptions.
+- `offered -> accepted -> invoiced -> paid -> escrowed -> fulfilled -> completed`
+- explicit invalid-transition reporting
+- escrow records
+- completion-triggered attestation issuance into `%silk-rep`
 
-**`silk-market.hoon`** (263 lines) -- Order state machine. Enforces the order lifecycle with strict transition validation. Manages escrow records. Triggers reputation attestations on completion by poking `%silk-rep`.
+It has its own scries and event stream, but it is not yet wired into `%silk-core` as the source of truth for the live order flow.
 
-**`silk-rep.hoon`** (129 lines) -- Reputation tracker. Stores issued and received attestations per pseudonym. Computes aggregate scores as simple averages. Attestation kinds: `%completion`, `%fulfillment`, `%payment`, `%dispute-fair`, `%general`.
+### `%silk-rep`
 
-**`silk-zenith.hoon`** (242 lines) -- Payment adapter. Maintains per-pseudonym address pools with use-once rotation. Creates invoices with fresh addresses. Tracks payment lifecycle (pending -> submitted -> confirmed). On confirmation, pokes `%silk-market` to set escrow. Supports local (`%zenith` agent) and external wallet modes.
+`desk/app/silk-rep.hoon` stores issued and imported attestations and computes a simple average score per subject nym.
 
-There is also a placeholder `silk.hoon` (94 lines) -- a stub app from the desk template, not part of the protocol.
+This agent is partially live today:
 
-### Types (`sur/silk.hoon`, 255 lines)
+- `%silk-core` imports inbound attestations into `%silk-rep`
+- locally authored feedback is also issued into `%silk-rep`
 
-Core protocol types:
+The API-facing reputation view is still assembled in `%silk-core`.
 
-- `pseudonym` -- market identity (`nym-id`, label, pubkey, timestamp)
-- `listing` -- seller advertisement (title, description, price, currency, expiry)
-- `offer` / `accept` / `reject` -- negotiation messages
-- `invoice` -- payment request with fresh address
-- `payment-proof` -- tx hash submission
-- `fulfillment` -- delivery confirmation
-- `dispute` / `verdict` -- dispute resolution (rulings: buyer-wins, seller-wins, split, dismissed)
-- `silk-thread` -- conversation state tracking a negotiation from open through completion
-- `attestation` -- signed reputation claim (subject, issuer, kind, score, note)
-- `silk-command` / `silk-event` -- command and event envelopes
-- `nym-route` -- mapping from pseudonym to skein endpoint
+### `%silk-zenith`
 
-### Order Lifecycle
+`desk/app/silk-zenith.hoon` tracks:
 
-```
-offered -> accepted -> invoiced -> paid -> escrowed -> fulfilled -> completed
-```
+- wallet mode (`%local` or `%external`)
+- address pools per seller nym
+- payment records per invoice
+- invoice creation, payment recording, confirmation, and failure events
 
-Any state can transition to `cancelled` or `disputed`. Disputes resolve to `resolved` via verdict. On completion, `%silk-market` automatically issues reputation attestations to both buyer (for payment) and seller (for fulfillment).
+The scaffolding exists, but `%silk-core` is not yet using it as the authoritative payment path.
 
-### Thread Status
+### `%silk`
 
-```
-open -> accepted -> paid -> fulfilled -> completed
-                                      -> disputed -> resolved
-       -> cancelled
-```
+`desk/app/silk.hoon` is still a template stub and is not part of the marketplace protocol.
 
-### HTTP API
+## Protocol Surface
 
-All endpoints at `/apps/silk/api/`. Authenticated via Eyre session cookie.
+Core types live in `desk/sur/silk.hoon`.
 
-**GET endpoints:**
+### Identity And Reputation Types
 
-| Path | Returns |
-|------|---------|
-| `/nyms` | List of pseudonyms |
-| `/listings` | Marketplace listings |
-| `/threads` | Negotiation threads with message counts |
-| `/orders` | Order records (stub -- pending silk-market scry integration) |
-| `/reputation` | Scores, issued/received attestations (stub -- pending silk-rep scry integration) |
-| `/stats` | Counts of nyms, listings, threads, routes, plus ship ID |
+- `pseudonym`
+- `attestation`
+- `nym-route`
 
-**POST actions** (all to `/apps/silk/api/`, JSON body with `action` field):
+### Marketplace And Thread Types
+
+- `listing`
+- `offer`
+- `accept`
+- `reject`
+- `invoice`
+- `payment-proof`
+- `fulfillment`
+- `dispute`
+- `verdict`
+- `silk-thread`
+
+### Message Types Carried Over `%skein`
+
+- listing gossip: `%listing`, `%catalog-request`, `%catalog`, `%listing-retracted`
+- thread messages: `%direct-message`, `%offer`, `%counter-offer`, `%accept`, `%reject`, `%invoice`, `%payment-proof`, `%fulfill`, `%complete`, `%dispute`, `%verdict`, `%attest`
+- reliability and reconciliation: `%ack`, `%sync-thread`, `%sync-thread-response`, `%ping`, `%pong`
+
+Some of these are defined earlier than they are used. In particular, `%counter-offer`, `%ping`, and `%pong` are typed but not yet part of the main UI/API flow.
+
+## Live Flow Today
+
+The implemented user flow is:
+
+1. Add marketplace peers or discover them through the `%skein` channel network.
+2. Gossip listings and nym routes over `%skein`.
+3. Open contact with a direct message or an offer.
+4. Accept or reject an offer.
+5. Create an invoice from the seller nym's wallet string.
+6. Submit a payment proof.
+7. Mark fulfillment.
+8. Confirm completion.
+9. Exchange feedback / attestations.
+
+Thread state is stored newest-first with a running hash chain. If peers disagree about thread history, `sync-thread` and `sync-thread-response` let them reconcile by comparing chain hashes and message counts.
+
+The `orders` screen in the UI is currently a projection derived from thread state in `%silk-core`. It is not yet a direct view of `%silk-market`.
+
+## HTTP API
+
+Authenticated via Eyre session cookie at `/apps/silk/api`.
+
+### `GET` endpoints
+
+- `/nyms`
+- `/listings`
+- `/threads`
+- `/peers`
+- `/orders`
+- `/reputation`
+- `/stats`
+
+Notes:
+
+- `/orders` is synthesized from `%silk-core` thread data plus cached verification data
+- `/reputation` is also synthesized in `%silk-core` from its attestation cache
+
+### `POST` actions
 
 ```json
-{"action": "create-nym", "label": "anon-seller"}
-{"action": "drop-nym", "id": "0v..."}
-{"action": "post-listing", "nym": "0v...", "title": "...", "description": "...", "price": 100, "currency": "usd"}
-{"action": "retract-listing", "id": "0v..."}
-{"action": "send-offer", "listing_id": "0v...", "seller": "0v...", "amount": 100, "currency": "usd", "nym": "0v..."}
-{"action": "accept-offer", "thread_id": "0v...", "offer_id": "0v..."}
-{"action": "reject-offer", "thread_id": "0v...", "offer_id": "0v...", "reason": "too low"}
+{"action":"create-nym","label":"anon-vendor","wallet":"zenith1..."}
+{"action":"drop-nym","id":"0v..."}
+{"action":"post-listing","title":"...","description":"...","price":100,"currency":"sZ","nym":"0v..."}
+{"action":"retract-listing","id":"0v..."}
+{"action":"add-peer","ship":"~sampel-palnet"}
+{"action":"drop-peer","ship":"~sampel-palnet"}
+{"action":"sync-catalog"}
+{"action":"send-offer","listing_id":"0v...","seller":"0v...","amount":100,"currency":"sZ","nym":"0v..."}
+{"action":"accept-offer","thread_id":"0v...","offer_id":"0v..."}
+{"action":"reject-offer","thread_id":"0v...","offer_id":"0v...","reason":"too low"}
+{"action":"send-invoice","thread_id":"0v..."}
+{"action":"submit-payment","thread_id":"0v...","tx_hash":"0x..."}
+{"action":"mark-fulfilled","thread_id":"0v...","note":"delivered"}
+{"action":"confirm-complete","thread_id":"0v..."}
+{"action":"leave-feedback","thread_id":"0v...","score":80,"note":"smooth trade","nym":"0v..."}
+{"action":"send-message","listing_id":"0v...","nym":"0v...","text":"hello"}
+{"action":"send-reply","thread_id":"0v...","nym":"0v...","text":"reply"}
+{"action":"verify-payment","thread_id":"0v..."}
 ```
 
-### Scry Endpoints
+`verify-payment` currently fires a `%khan` balance query against the seller wallet and stores a local verification snapshot. It is not yet a transaction-proof or escrow verifier.
 
-**silk-core:**
-- `/x/nyms` -- all pseudonyms
-- `/x/listings` -- all listings
-- `/x/threads` -- all threads
-- `/x/thread/<@uv>` -- single thread
-- `/x/stats` -- counts
+## Scries And Watches
 
-**silk-market:**
-- `/x/orders` -- all orders
-- `/x/order/<@uv>` -- single order
-- `/x/stats` -- counts
+### `%silk-core`
 
-**silk-rep:**
-- `/x/scores` -- all reputation scores
-- `/x/score/<@uv>` -- single nym score
-- `/x/issued` -- attestations this ship issued
-- `/x/received` -- attestations received
-- `/x/stats` -- counts
+Scries:
 
-**silk-zenith:**
-- `/x/payments` -- all payment records
-- `/x/payment/<@uv>` -- single payment
-- `/x/addresses` -- all addresses
-- `/x/mode` -- current wallet mode
-- `/x/stats` -- counts
+- `/x/nyms`
+- `/x/listings`
+- `/x/threads`
+- `/x/thread/<thread-id>`
+- `/x/peers`
+- `/x/stats`
+
+Watch:
+
+- `/events`
+
+### `%silk-market`
+
+Scries:
+
+- `/x/orders`
+- `/x/order/<thread-id>`
+- `/x/stats`
+
+Watch:
+
+- `/market-events`
+
+### `%silk-rep`
+
+Scries:
+
+- `/x/scores`
+- `/x/score/<nym-id>`
+- `/x/issued`
+- `/x/received`
+- `/x/stats`
+
+Watch:
+
+- `/rep-events`
+
+### `%silk-zenith`
+
+Scries:
+
+- `/x/payments`
+- `/x/payment/<invoice-id>`
+- `/x/addresses`
+- `/x/mode`
+- `/x/stats`
+
+Watch:
+
+- `/zenith-events`
 
 ## Frontend
 
-Vanilla JS single-page application. No framework. Dark theme. Hash-based routing.
+The UI in `ui/` is a Vite single-page app bundled with `vite-plugin-singlefile`.
 
-**Views:** Dashboard, Identities, Marketplace, Threads, Orders, Reputation
+Current views:
 
-**Stack:** Vite + `vite-plugin-singlefile` for bundling into a single HTML file. Uploaded to ship via Globulator. Dev server proxies `/apps/silk/api` to the local ship.
+- Dashboard
+- Identities
+- Marketplace
+- Threads
+- Orders
+- Reputation
+- Network
 
-**Files:**
-- `ui/js/api.js` -- API client (GET/POST wrapper around `/apps/silk/api`)
-- `ui/js/app.js` -- Application logic, rendering, event handling (603 lines)
-- `ui/css/app.css` -- Styles (919 lines)
-- `ui/main.js` -- Entry point
-- `ui/index.html` -- Shell
+The network view also talks to the local `%skein` API so operators can:
 
-Auto-refreshes data every 15 seconds.
+- add or remove marketplace peers
+- discover or drop relay descriptors
+- raise or lower `%skein` minimum relay hops
 
-## Desk Layout
+`./sync` builds the UI, globs it, updates `desk/desk.docket-0`, and rsyncs the desk to the configured pier path.
 
-```
-desk/
-  app/
-    silk-core.hoon       # protocol hub + HTTP API
-    silk-market.hoon     # order state machine + escrow
-    silk-rep.hoon        # reputation attestations
-    silk-zenith.hoon     # payment adapter
-    silk.hoon            # placeholder (not part of protocol)
-  sur/
-    silk.hoon            # commerce protocol types
-    skein.hoon           # mixnet transport types (dependency)
-    skein-crypto.hoon    # crypto primitives (dependency)
-    docket.hoon          # desk metadata types
-    verb.hoon            # verbose logging types
-  mar/
-    silk-command.hoon    # silk command mark
-    silk-event.hoon      # silk event mark
-    skein-admin.hoon     # skein admin mark (dependency)
-    skein-event.hoon     # skein event mark (dependency)
-    skein-send.hoon      # skein send mark (dependency)
-    bill.hoon            # base marks
-    docket-0.hoon
-    hoon.hoon
-    kelvin.hoon
-    mime.hoon
-    noun.hoon
-  lib/
-    server.hoon          # HTTP response helpers
-    dbug.hoon            # debug wrapper
-    default-agent.hoon   # default agent arms
-    docket.hoon          # docket helpers
-    skeleton.hoon        # agent skeleton
-    verb.hoon            # verbose logging
-  desk.bill              # agents: silk-core, silk-rep, silk-market, silk-zenith
-  desk.docket-0          # app metadata (title, glob, color)
-  sys.kelvin             # zuse 409
-```
+## Known Gaps
 
-## Development
+The important implementation holes today are:
 
-### Requirements
+- `%silk-core` accepts most thread mutations directly and does not yet use `%silk-market` as the authoritative legality check
+- invoice generation is still tied directly to the seller nym wallet string; `%silk-zenith` address rotation is not in the live path
+- `verify-payment` checks wallet balance, not proof of payment to a specific invoice address or escrow contract
+- attestation signatures and pseudonym keys are placeholders; inbound attestations are imported without verification
+- counter-offers, keepalives, and negotiation-key material are defined but not yet exercised in the live flow
+- dispute filing and verdict messages exist, but there is no complete adjudication or escrow-release workflow
+- availability is still mostly best-effort; there are no retries, escrow watchers, or authoritative settlement confirmations yet
 
-- Urbit runtime with fakeship support
-- Node.js (for frontend builds)
-- `%skein` desk installed on the target ship (separate repo)
-
-### Ships
-
-Development uses three fakeships: `~fen`, `~nes`, `~zod`. Piers live at `~/.urbit/{ship}/`.
-
-### Workflow
-
-1. Edit source files locally in `desk/`
-2. Copy to the mounted pier: `cp -r desk/* ~/.urbit/fen/silk/`
-3. Commit in dojo: `|commit %silk`
-
-Or use the MCP tools to `insert-file` and `commit-desk` directly.
-
-### Frontend Build
-
-```sh
-cd ui
-npm install
-npm run build    # produces dist/index.html (single file)
-```
-
-Upload the built glob via Globulator or update the `glob-http` URL in `desk.docket-0`.
-
-For development with hot reload:
-
-```sh
-npm run dev      # proxies API calls to localhost:8080
-```
-
-### Installing %skein
-
-`%silk` depends on `%skein` being installed on the same ship. The skein types (`sur/skein.hoon`, `sur/skein-crypto.hoon`) and marks (`mar/skein-*.hoon`) are vendored into the silk desk, but the `%skein` agent itself must be running for message relay to work.
-
-On init, `%silk-core` pokes `%skein` with `[%bind %silk-core]` to register itself as a transport endpoint.
+So the repo already demonstrates the transport split, catalog sync, anonymous negotiation threads, and a usable browser UX, but the trust-minimized exchange story still needs the `market` and `zenith` agents to become the real backbone rather than sidecars.

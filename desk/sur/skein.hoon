@@ -39,9 +39,10 @@
   ==
 ::
 +$  reply-block
-  $:  token=reply-token
-      header=header-box
-      body=payload-box
+  $:  token=reply-token       ::  derive body key: (shaz (jam [%reply-body token]))
+      cell-id=@uv             ::  cell-id baked into header layers
+      first-hop=ship          ::  where recipient sends the reply cell
+      header=header-box       ::  pre-built onion header (route back to sender)
       expiry=(unit @da)
   ==
 ::
@@ -69,6 +70,12 @@
       [%join-channel channel=channel-id app=app-id]
       [%leave-channel channel=channel-id]
       [%set-min-hops n=@ud]
+      [%add-seed ship=@p]
+      [%drop-seed ship=@p]
+      [%set-adaptive-hops on=?]
+      [%build-reply-block ~]
+      [%trust-relay relay=relay-id]
+      [%untrust-relay relay=relay-id]
   ==
 ::
 +$  envelope
@@ -110,6 +117,13 @@
       [%channel-joined channel=channel-id]
       [%channel-left channel=channel-id]
       [%channel-peer channel=channel-id ship=@p joined=?]
+      [%degraded-route cell-id=@uv wanted=@ud got=@ud]
+      [%seed-added ship=@p]
+      [%seed-removed ship=@p]
+      [%reply-block-built =reply-block]
+      [%relay-trusted relay=relay-id]
+      [%relay-untrusted relay=relay-id]
+      [%relay-expired relay=relay-id]
   ==
 ::
 +$  app-view

@@ -15,13 +15,11 @@
       created-at=@da
   ==
 ::
-::  negotiation-key: short-lived per-thread ephemeral key
+::  nym signing key material (crub:crypto)
 ::
-+$  nego-key
-  $:  pubkey=@ux
-      seckey=@ux
-      thread-id=@uv
-      created-at=@da
++$  nym-keypair
+  $:  pub=@ux       ::  public signing key
+      sec=@ux       ::  private signing key
   ==
 ::
 ::  attestation: signed claim about a pseudonym
@@ -54,7 +52,6 @@
 +$  silk-message
   $%  [%listing listing]
       [%offer offer]
-      [%counter-offer offer]
       [%accept accept]
       [%reject reject]
       [%invoice invoice]
@@ -70,9 +67,6 @@
       ::  thread reconciliation
       [%sync-thread thread-id=@uv chain=@ux msg-count=@ud]
       [%sync-thread-response =silk-thread]
-      ::  keepalive
-      [%ping thread-id=@uv]
-      [%pong thread-id=@uv]
       ::  marketplace gossip
       [%catalog-request from-ship=@p]
       [%catalog listings=(list listing) routes=(list nym-route)]
@@ -230,6 +224,7 @@
       [%send-offer =offer]
       [%accept-offer thread-id=@uv offer-id=offer-id]
       [%reject-offer thread-id=@uv offer-id=offer-id reason=@t]
+      [%cancel-thread thread-id=@uv reason=@t]
       ::  payment
       [%send-invoice =invoice]
       [%submit-payment =payment-proof]

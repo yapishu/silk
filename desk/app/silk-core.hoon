@@ -78,8 +78,35 @@
       next-seq=@ud
   ==
 ::
-+$  current-state  state-4
++$  pending-msg
+  $:  msg-hash=@ux
+      thread-id=@uv
+      target=nym-route
+      msg=silk-message
+      sent-at=@da
+      attempts=@ud
+  ==
+::
++$  state-5
+  $:  %5
+      nyms=(map nym-id pseudonym)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      routes=(map nym-id nym-route)
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
+      next-seq=@ud
+      keys=(map nym-id nym-keypair)
+      pending-acks=(map @ux pending-msg)  ::  msg-hash -> pending
+  ==
+::
++$  current-state  state-5
 +$  card  card:agent:gall
+::
+++  max-resend   3          ::  max resend attempts
+++  resend-base  ~m1        ::  base backoff for resends
+++  resend-period  ~m2      ::  how often to check pending acks
 ::
 ++  skein-app  %silk-core
 ::
@@ -109,6 +136,38 @@
   |=  ev=silk-event
   ^-  card
   [%give %fact [/events]~ %silk-event !>(ev)]
+::
+::  track a sent protocol message for ack-based resend
+::
+++  make-pending
+  |=  [tid=@uv target=nym-route msg=silk-message now=@da]
+  ^-  [hash=@ux pm=pending-msg]
+  =/  hash=@ux  `@ux`(sham msg)
+  [hash [hash tid target msg now 0]]
+::
+::  poke silk-market to create or advance an order
+::
+++  market-create-card
+  |=  [our=ship tid=@uv lid=listing-id buyer=nym-id seller=nym-id oid=offer-id amount=@ud currency=@tas]
+  ^-  card
+  [%pass /market/create %agent [our %silk-market] %poke %noun !>([%create-order tid lid buyer seller oid amount currency])]
+::
+++  market-advance-card
+  |=  [our=ship tid=@uv to=@tas]
+  ^-  card
+  [%pass /market/advance %agent [our %silk-market] %poke %noun !>([%advance tid to])]
+::
+::  poke silk-zenith for invoice and payment operations
+::
+++  zenith-invoice-card
+  |=  [our=ship tid=@uv amount=@ud currency=@tas seller-nym=nym-id]
+  ^-  card
+  [%pass /zenith/invoice %agent [our %silk-zenith] %poke %noun !>([%create-invoice tid amount currency seller-nym])]
+::
+++  zenith-payment-card
+  |=  [our=ship inv-id=invoice-id tx-hash=@ux]
+  ^-  card
+  [%pass /zenith/payment %agent [our %silk-zenith] %poke %noun !>([%record-payment inv-id tx-hash])]
 ::
 ++  give-http
   |=  [eyre-id=@ta status=@ud headers=(list [@t @t]) body=(unit octs)]
@@ -170,6 +229,11 @@
   :~  [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
       [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
       [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
+      ::  subscribe to market and zenith event feeds
+      [%pass /market/events %agent [our.bowl %silk-market] %watch /market-events]
+      [%pass /zenith/events %agent [our.bowl %silk-zenith] %watch /zenith-events]
+      ::  resend timer for pending acks
+      [%pass /silk/resend %arvo %b %wait (add now.bowl resend-period)]
   ==
 ::
 ++  on-save
@@ -178,57 +242,84 @@
 ++  on-load
   |=  old=vase
   ^-  (quip card _this)
+  ~&  [%silk-core %on-load %starting]
+  ::  leave stale subscriptions before re-subscribing (prevents wire-not-unique)
+  =/  leave-cards=(list card)
+    =/  acc=(list card)  ~
+    =?  acc  (~(has by wex.bowl) [/market/events our.bowl %silk-market])
+      [[%pass /market/events %agent [our.bowl %silk-market] %leave ~] acc]
+    =?  acc  (~(has by wex.bowl) [/zenith/events our.bowl %silk-zenith])
+      [[%pass /zenith/events %agent [our.bowl %silk-zenith] %leave ~] acc]
+    acc
   =/  load-cards=(list card)
     :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
         [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
         [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
+        ::  subscribe to market and zenith event feeds
+        [%pass /market/events %agent [our.bowl %silk-market] %watch /market-events]
+        [%pass /zenith/events %agent [our.bowl %silk-zenith] %watch /zenith-events]
+        ::  resend timer for pending acks
+        [%pass /silk/resend %arvo %b %wait (add now.bowl resend-period)]
     ==
+  ~&  [%silk-core %on-load %bootstrap-cards (lent leave-cards) %leave (lent load-cards) %load]
+  =/  load-cards  (weld leave-cards load-cards)
+  =/  try-5  (mule |.(!<(state-5 old)))
+  ?:  ?=(%& -.try-5)
+    =.  state  p.try-5
+    [load-cards this]
   =/  try-4  (mule |.(!<(state-4 old)))
   ?:  ?=(%& -.try-4)
-    =.  state  p.try-4
+    =.  state
+      :*  %5
+          nyms.p.try-4  listings.p.try-4  threads.p.try-4
+          routes.p.try-4  peers.p.try-4  attestations.p.try-4
+          verifications.p.try-4  next-seq.p.try-4
+          ~    ::  keys (generated on next create-nym)
+          ~    ::  pending-acks
+      ==
     [load-cards this]
   =/  try-3  (mule |.(!<(state-3 old)))
   ?:  ?=(%& -.try-3)
     =.  state
-      :*  %4
+      :*  %5
           (~(run by nyms.p.try-3) migrate-nym)
           listings.p.try-3  threads.p.try-3
           routes.p.try-3  peers.p.try-3
-          attestations.p.try-3  ~  next-seq.p.try-3
+          attestations.p.try-3  ~  next-seq.p.try-3  ~  ~
       ==
     [load-cards this]
   =/  try-2  (mule |.(!<(state-2 old)))
   ?:  ?=(%& -.try-2)
     =.  state
-      :*  %4
+      :*  %5
           (~(run by nyms.p.try-2) migrate-nym)
           listings.p.try-2
           (~(run by threads.p.try-2) migrate-thread)
           routes.p.try-2  peers.p.try-2
-          attestations.p.try-2  ~  next-seq.p.try-2
+          attestations.p.try-2  ~  next-seq.p.try-2  ~  ~
       ==
     [load-cards this]
   =/  try-1  (mule |.(!<(state-1 old)))
   ?:  ?=(%& -.try-1)
     =.  state
-      :*  %4
+      :*  %5
           (~(run by nyms.p.try-1) migrate-nym)
           listings.p.try-1
           (~(run by threads.p.try-1) migrate-thread)
-          routes.p.try-1  peers.p.try-1  ~  ~  next-seq.p.try-1
+          routes.p.try-1  peers.p.try-1  ~  ~  next-seq.p.try-1  ~  ~
       ==
     [load-cards this]
   =/  try-0  (mule |.(!<(state-0 old)))
   ?:  ?=(%& -.try-0)
     =.  state
-      :*  %4
+      :*  %5
           (~(run by nyms.p.try-0) migrate-nym)
           listings.p.try-0
           (~(run by threads.p.try-0) migrate-thread)
-          routes.p.try-0  ~  ~  ~  next-seq.p.try-0
+          routes.p.try-0  ~  ~  ~  next-seq.p.try-0  ~  ~
       ==
     [load-cards this]
-  =.  state  [%4 ~ ~ ~ ~ ~ ~ ~ 1]
+  =.  state  [%5 ~ ~ ~ ~ ~ ~ ~ 1 ~ ~]
   [load-cards this]
 ::
 ++  on-poke
@@ -291,6 +382,11 @@
       `this
     ::  inbound skein delivery (opaque payload -> silk-message)
     ?.  ?=(@ raw)
+      ::  try to parse as silk-command (e.g. from MCP noun pokes)
+      =/  cmd-try  (mule |.((silk-command raw)))
+      ?:  ?=(%& -.cmd-try)
+        ?>  =(our src):bowl
+        (handle-command p.cmd-try)
       ~&  [%silk-core %noun-not-atom]
       `this
     =/  parsed  (mule |.((silk-message (cue raw))))
@@ -382,7 +478,6 @@
     =/  tid=thread-id
       ?-  -.msg
         %offer           thread-id.msg
-        %counter-offer   thread-id.msg
         %accept          thread-id.msg
         %reject          thread-id.msg
         %invoice         thread-id.msg
@@ -393,8 +488,6 @@
         %complete        thread-id.msg
         %direct-message  thread-id.msg
         %ack             thread-id.msg
-        %ping            thread-id.msg
-        %pong            thread-id.msg
       ==
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
@@ -414,7 +507,10 @@
           :~  (event-card [%thread-opened new-thd])
               (event-card [%message-received tid msg])
           ==
-        :-  (weld ev-cards ack-cards)
+        ::  notify silk-market: create order for inbound offer
+        =/  mkt-cards=(list card)
+          [(market-create-card our.bowl tid listing-id.o buyer.o seller.o id.o amount.o currency.o)]~
+        :-  ;:(weld ev-cards ack-cards mkt-cards)
         this
       ?:  ?=(%direct-message -.msg)
         =/  dm-lid=listing-id  listing-id.+.msg
@@ -433,13 +529,13 @@
       ::  unknown thread, log and drop
       :-  [(event-card [%message-received tid msg])]~
       this
-    ::  acks don't advance state, just log receipt
+    ::  acks clear pending resend entries
     ?:  ?=(%ack -.msg)
-      ~&  [%silk-ack %received tid msg-hash.msg]
+      =.  pending-acks.state  (~(del by pending-acks.state) msg-hash.msg)
       `this
     ::  update thread status based on inbound message type
     =/  new-status=thread-status
-      ?:  ?=(?(%offer %counter-offer) -.msg)
+      ?:  ?=(%offer -.msg)
         %open
       ?:  ?=(%accept -.msg)
         %accepted
@@ -463,7 +559,7 @@
     =.  threads.state  (~(put by threads.state) tid updated)
     ::  send ack back to message sender
     =/  sender-nym=nym-id
-      ?:  ?=(?(%offer %counter-offer %payment-proof %complete) -.msg)
+      ?:  ?=(?(%offer %payment-proof %complete) -.msg)
         buyer.u.thd
       ?:  ?=(%direct-message -.msg)
         sender.+.msg
@@ -635,6 +731,8 @@
           ['threads' (numb:enjs:format ~(wyt by threads.state))]
           ['routes' (numb:enjs:format ~(wyt by routes.state))]
           ['peers' (numb:enjs:format ~(wyt in peers.state))]
+          ['pendingAcks' (numb:enjs:format ~(wyt by pending-acks.state))]
+          ['keys' (numb:enjs:format ~(wyt by keys.state))]
           ['ship' s+(scot %p our.bowl)]
       ==
     ==
@@ -749,6 +847,11 @@
       =/  f  (ot ~['thread_id'^so 'offer_id'^so reason+so])
       =/  [tid=@t oid=@t reason=@t]  (f jon)
       [%reject-offer (slav %uv tid) (slav %uv oid) reason]
+    ::
+        %'cancel-thread'
+      =/  f  (ot ~['thread_id'^so reason+so])
+      =/  [tid=@t reason=@t]  (f jon)
+      [%cancel-thread (slav %uv tid) reason]
     ==
   ::
   ::  payment-flow API handlers (derive full types from state)
@@ -887,10 +990,15 @@
         ~&  [%silk-warn %no-route-for-complete counter]
         ~
       [(skein-send-card our.bowl u.route complete-msg)]~
+    =/  mkt-cards=(list card)
+      [(market-advance-card our.bowl tid %completed)]~
     :_  this
-    %+  weld  [(event-card [%thread-updated tid %completed])]~
-    %+  weld  send-cards
-    (ok-response eyre-id)
+    ;:  weld
+      [(event-card [%thread-updated tid %completed])]~
+      send-cards
+      mkt-cards
+      (ok-response eyre-id)
+    ==
   ::
   ++  handle-api-feedback
     |=  [eyre-id=@ta jon=json]
@@ -907,16 +1015,15 @@
       ?:  =(issuer buyer.u.thd)
         seller.u.thd
       buyer.u.thd
+    =/  att-id=attest-id  (sham [our.bowl now.bowl tid issuer])
+    =/  unsigned=attestation
+      [att-id subject issuer %completion sc.parsed nt.parsed now.bowl `@ux`0]
+    ::  sign with issuer's key if available
+    =/  kp=(unit nym-keypair)  (~(get by keys.state) issuer)
     =/  att=attestation
-      :*  (sham [our.bowl now.bowl tid issuer])
-          subject
-          issuer
-          %completion
-          sc.parsed
-          nt.parsed
-          now.bowl
-          `@ux`0
-      ==
+      ?~  kp  unsigned
+      =/  msg=@  (jam [id.unsigned subject.unsigned issuer.unsigned kind.unsigned score.unsigned note.unsigned issued-at.unsigned])
+      unsigned(sig (sign:ed:crypto msg sec.u.kp))
     =.  attestations.state  (~(put by attestations.state) id.att att)
     =/  route=(unit nym-route)  (~(get by routes.state) subject)
     =/  send-cards=(list card)
@@ -1042,14 +1149,17 @@
     ?-  -.cmd
         %create-nym
       =/  id=nym-id  (sham [our.bowl now.bowl label.cmd])
-      =/  seed=@ux  (shaz (jam [id now.bowl eny.bowl]))
-      =/  nym=pseudonym  [id label.cmd seed wallet.cmd now.bowl]
+      =/  seed=@ux  (shax (jam [id now.bowl eny.bowl]))
+      =/  pub=@ux   `@ux`(puck:ed:crypto seed)
+      =/  nym=pseudonym  [id label.cmd pub wallet.cmd now.bowl]
       =.  nyms.state  (~(put by nyms.state) id nym)
+      =.  keys.state  (~(put by keys.state) id [pub seed])
       :-  [(event-card [%nym-created nym])]~
       this
     ::
         %drop-nym
       =.  nyms.state  (~(del by nyms.state) id.cmd)
+      =.  keys.state  (~(del by keys.state) id.cmd)
       =.  routes.state  (~(del by routes.state) id.cmd)
       :-  [(event-card [%nym-dropped id.cmd])]~
       this
@@ -1125,7 +1235,14 @@
         :~  (skein-send-card our.bowl u.route [%offer o])
             (skein-send-card our.bowl u.route [%catalog ~ [buyer-route]~])
         ==
-      :-  (weld [(event-card [%thread-opened thd])]~ send-cards)
+      ::  track for ack-based resend
+      =?  pending-acks.state  ?=(^ route)
+        =/  [hash=@ux pm=pending-msg]  (make-pending tid u.route [%offer o] now.bowl)
+        (~(put by pending-acks.state) hash pm)
+      ::  notify silk-market: create order
+      =/  mkt-cards=(list card)
+        [(market-create-card our.bowl tid listing-id.o buyer.o seller.o id.o amount.o currency.o)]~
+      :-  ;:(weld [(event-card [%thread-opened thd])]~ send-cards mkt-cards)
       this
     ::
         %accept-offer
@@ -1145,7 +1262,12 @@
         :~  (skein-send-card our.bowl u.route [%accept acc])
             (skein-send-card our.bowl u.route [%catalog ~ [seller-route]~])
         ==
-      :-  (weld [(event-card [%thread-updated thread-id.cmd %accepted])]~ send-cards)
+      =?  pending-acks.state  ?=(^ route)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.cmd u.route [%accept acc] now.bowl)
+        (~(put by pending-acks.state) hash pm)
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.cmd %accepted)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.cmd %accepted])]~ send-cards mkt-cards)
       this
     ::
         %reject-offer
@@ -1160,7 +1282,31 @@
       =/  send-cards=(list card)
         ?~  route  ~
         [(skein-send-card our.bowl u.route [%reject rej])]~
-      :-  (weld [(event-card [%thread-updated thread-id.cmd %cancelled])]~ send-cards)
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.cmd %cancelled)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.cmd %cancelled])]~ send-cards mkt-cards)
+      this
+    ::
+        %cancel-thread
+      =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.cmd)
+      ?~  thd  `this
+      ?:  ?=(?(%completed %cancelled %resolved) thread-status.u.thd)  `this
+      =/  nc=@ux  (advance-chain chain.u.thd %reject)
+      =/  rej=reject  [thread-id.cmd `@uv`0 reason.cmd now.bowl]
+      =/  updated=silk-thread
+        u.thd(thread-status %cancelled, messages [[%reject rej] messages.u.thd], chain nc, updated-at now.bowl)
+      =.  threads.state  (~(put by threads.state) thread-id.cmd updated)
+      ::  notify counterparty
+      =/  counterparty=nym-id
+        ?:  (~(has by nyms.state) seller.u.thd)  buyer.u.thd
+        seller.u.thd
+      =/  route=(unit nym-route)  (~(get by routes.state) counterparty)
+      =/  send-cards=(list card)
+        ?~  route  ~
+        [(skein-send-card our.bowl u.route [%reject rej])]~
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.cmd %cancelled)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.cmd %cancelled])]~ send-cards mkt-cards)
       this
     ::
         %send-invoice
@@ -1171,11 +1317,17 @@
       =/  updated=silk-thread
         u.thd(messages [[%invoice inv] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.inv updated)
+      ::  send invoice to buyer immediately with seller's wallet address
       =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
       =/  send-cards=(list card)
         ?~  route  ~
         [(skein-send-card our.bowl u.route [%invoice inv])]~
-      :-  (weld [(event-card [%thread-updated thread-id.inv %accepted])]~ send-cards)
+      ::  notify market + request zenith for optional address rotation
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.inv %invoiced)]~
+      =/  zen-cards=(list card)
+        [(zenith-invoice-card our.bowl thread-id.inv amount.inv currency.inv seller.inv)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.inv %accepted])]~ send-cards mkt-cards zen-cards)
       this
     ::
         %submit-payment
@@ -1190,7 +1342,13 @@
       =/  send-cards=(list card)
         ?~  route  ~
         [(skein-send-card our.bowl u.route [%payment-proof pp])]~
-      :-  (weld [(event-card [%thread-updated thread-id.pp %paid])]~ send-cards)
+      =?  pending-acks.state  ?=(^ route)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.pp u.route [%payment-proof pp] now.bowl)
+        (~(put by pending-acks.state) hash pm)
+      ::  notify market
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.pp %paid)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.pp %paid])]~ send-cards mkt-cards)
       this
     ::
         %send-fulfillment
@@ -1205,7 +1363,12 @@
       =/  send-cards=(list card)
         ?~  route  ~
         [(skein-send-card our.bowl u.route [%fulfill ful])]~
-      :-  (weld [(event-card [%thread-updated thread-id.ful %fulfilled])]~ send-cards)
+      =?  pending-acks.state  ?=(^ route)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.ful u.route [%fulfill ful] now.bowl)
+        (~(put by pending-acks.state) hash pm)
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.ful %fulfilled)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.ful %fulfilled])]~ send-cards mkt-cards)
       this
     ::
         %file-dispute
@@ -1224,7 +1387,9 @@
       =/  send-cards=(list card)
         ?~  route  ~
         [(skein-send-card our.bowl u.route [%dispute dis])]~
-      :-  (weld [(event-card [%thread-updated thread-id.dis %disputed])]~ send-cards)
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.dis %disputed)]~
+      :-  ;:(weld [(event-card [%thread-updated thread-id.dis %disputed])]~ send-cards mkt-cards)
       this
     ::
         %submit-verdict
@@ -1235,7 +1400,9 @@
       =/  updated=silk-thread
         u.thd(thread-status %resolved, messages [[%verdict ver] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.ver updated)
-      :-  [(event-card [%thread-updated thread-id.ver %resolved])]~
+      =/  mkt-cards=(list card)
+        [(market-advance-card our.bowl thread-id.ver %resolved)]~
+      :-  (weld [(event-card [%thread-updated thread-id.ver %resolved])]~ mkt-cards)
       this
     ==
   ::
@@ -1249,6 +1416,7 @@
         ['label' s+label.n]
         ['pubkey' s+(scot %ux pubkey.n)]
         ['wallet' s+wallet.n]
+        ['has_signing_key' b+(~(has by keys.state) id.n)]
         ['created_at' (numb:enjs:format (div (sub created-at.n ~1970.1.1) ~s1))]
     ==
   ::
@@ -1472,6 +1640,94 @@
       ~&  [%silk-poke-failed wire]
       ((slog u.p.sign) `this)
     `this
+  ::
+      [%market *]
+    ?-  -.sign
+        %poke-ack
+      ?~  p.sign  `this
+      ~&  [%silk-market-poke-failed wire]
+      ((slog u.p.sign) `this)
+    ::
+        %fact
+      ?.  =(%noun p.cage.sign)  `this
+      =/  raw  q.q.cage.sign
+      ~&  [%silk-market-event ?:(?=(@ raw) raw -.raw)]
+      ?:  ?=([%invalid-transition @ @ @] raw)
+        ~&  [%silk-market %invalid-transition +.raw]
+        `this
+      ?:  ?=([%order-completed @ @ @] raw)
+        ~&  [%silk-market %order-completed +.raw]
+        `this
+      `this
+    ::
+        %kick
+      :_  this
+      :~  [%pass /market/events %agent [our.bowl %silk-market] %watch /market-events]
+      ==
+    ::
+        %watch-ack
+      ?~  p.sign  `this
+      ((slog u.p.sign) `this)
+    ==
+  ::
+      [%zenith *]
+    ?-  -.sign
+        %poke-ack
+      ?~  p.sign  `this
+      ~&  [%silk-zenith-poke-failed wire]
+      ((slog u.p.sign) `this)
+    ::
+        %fact
+      ?.  =(%noun p.cage.sign)  `this
+      =/  raw  q.q.cage.sign
+      ~&  [%silk-zenith-event ?:(?=(@ raw) raw -.raw)]
+      ::  on invoice created: optionally update address if zenith rotated it
+      ?:  ?=([%invoice-created *] raw)
+        =/  rec  +.raw
+        ::  rec is a payment-record noun: [invoice-id thread-id amount currency address ...]
+        =/  tid=@uv  ;;(@uv +<.rec)
+        =/  addr=@t  ;;(@t +>+>-.rec)
+        ~&  [%silk-zenith %invoice-created tid addr]
+        ::  skip if zenith couldn't provide a real address
+        ?:  =('no-address-available' addr)  `this
+        ::  update local invoice with rotated address and resend to buyer
+        =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
+        ?~  thd  `this
+        =/  updated-msgs=(list silk-message)
+          %+  turn  messages.u.thd
+          |=  m=silk-message
+          ?.  ?=(%invoice -.m)  m
+          [%invoice +.m(pay-address addr)]
+        =.  threads.state
+          (~(put by threads.state) tid u.thd(messages updated-msgs))
+        =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+        =/  inv-msg=(unit silk-message)
+          =/  ms=(list silk-message)  updated-msgs
+          |-
+          ?~  ms  ~
+          ?:  ?=(%invoice -.i.ms)  `i.ms
+          $(ms t.ms)
+        ?~  inv-msg  `this
+        ?~  route  `this
+        :_  this
+        [(skein-send-card our.bowl u.route u.inv-msg)]~
+      ::  on payment confirmed: advance market to escrowed
+      ?:  ?=([%payment-confirmed @ @] raw)
+        =/  tid=@uv  ;;(@uv +<.raw)
+        ~&  [%silk-zenith %payment-confirmed tid]
+        :_  this
+        [(market-advance-card our.bowl tid %escrowed)]~
+      `this
+    ::
+        %kick
+      :_  this
+      :~  [%pass /zenith/events %agent [our.bowl %silk-zenith] %watch /zenith-events]
+      ==
+    ::
+        %watch-ack
+      ?~  p.sign  `this
+      ((slog u.p.sign) `this)
+    ==
   ==
 ++  on-arvo
   |=  [=wire sign=sign-arvo]
@@ -1479,6 +1735,42 @@
   ?+  wire  (on-arvo:def wire sign)
       [%eyre *]
     `this
+  ::
+      [%silk %resend ~]
+    ::  process pending acks: resend or expire
+    =/  now=@da  now.bowl
+    =/  to-resend=(list [hash=@ux pm=pending-msg])
+      %+  murn  ~(tap by pending-acks.state)
+      |=  [hash=@ux pm=pending-msg]
+      ?:  (gte attempts.pm max-resend)  ~   ::  expired, will be pruned
+      =/  backoff=@dr  (mul resend-base (bex attempts.pm))
+      ?.  (gte now (add sent-at.pm backoff))  ~  ::  not time yet
+      `[hash pm]
+    ::  prune expired entries
+    =.  pending-acks.state
+      =/  expired=(list @ux)
+        %+  murn  ~(tap by pending-acks.state)
+        |=  [hash=@ux pm=pending-msg]
+        ?:  (gte attempts.pm max-resend)  `hash
+        ~
+      =/  pa  pending-acks.state
+      =/  ex  expired
+      |-
+      ?~  ex  pa
+      $(ex t.ex, pa (~(del by pa) i.ex))
+    ::  resend and bump attempts
+    =/  resend-cards=(list card)
+      %+  turn  to-resend
+      |=  [hash=@ux pm=pending-msg]
+      (skein-send-card our.bowl target.pm msg.pm)
+    =.  pending-acks.state
+      %-  ~(gas by pending-acks.state)
+      %+  turn  to-resend
+      |=  [hash=@ux pm=pending-msg]
+      [hash pm(attempts +(attempts.pm), sent-at now)]
+    ::  reschedule timer
+    :-  (snoc resend-cards [%pass /silk/resend %arvo %b %wait (add now resend-period)])
+    this
   ::
       [%zenith-check @ ~]
     =/  tid=@uv  (slav %uv i.t.wire)
