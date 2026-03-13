@@ -43,16 +43,18 @@
   ==
 ::
 +$  order-status
-  $?  %offered       ::  buyer made an offer
-      %accepted      ::  seller accepted
-      %invoiced      ::  seller sent invoice
-      %paid          ::  buyer submitted payment proof
-      %escrowed      ::  payment confirmed in escrow
-      %fulfilled     ::  seller delivered goods
-      %completed     ::  buyer confirmed, order done
-      %disputed      ::  dispute filed
-      %resolved      ::  dispute resolved
-      %cancelled     ::  cancelled
+  $?  %offered            ::  buyer made an offer
+      %accepted           ::  seller accepted
+      %escrow-proposed    ::  buyer proposed escrow w/ moderator
+      %escrow-agreed      ::  seller agreed, multisig derived
+      %invoiced           ::  seller sent invoice
+      %paid               ::  buyer submitted payment proof
+      %escrowed           ::  payment confirmed in escrow
+      %fulfilled          ::  seller delivered goods
+      %completed          ::  buyer confirmed, order done
+      %disputed           ::  dispute filed
+      %resolved           ::  dispute resolved
+      %cancelled          ::  cancelled
   ==
 ::
 ::  valid state transitions
@@ -61,20 +63,25 @@
   |=  [from=order-status to=order-status]
   ^-  ?
   ?+  [from to]  %.n
-    [%offered %accepted]     %.y
-    [%offered %cancelled]    %.y
-    [%accepted %invoiced]    %.y
-    [%accepted %cancelled]   %.y
-    [%invoiced %paid]        %.y
-    [%invoiced %cancelled]   %.y
-    [%paid %escrowed]        %.y
-    [%escrowed %fulfilled]   %.y
-    [%escrowed %disputed]    %.y
-    [%fulfilled %completed]  %.y
-    [%fulfilled %disputed]   %.y
-    [%disputed %resolved]    %.y
-    [%disputed %escrowed]    %.y    ::  dismissed dispute returns to escrowed
-    [%completed %completed]  %.y
+    [%offered %accepted]               %.y
+    [%offered %cancelled]              %.y
+    [%accepted %escrow-proposed]       %.y  ::  buyer proposes escrow
+    [%accepted %invoiced]              %.y  ::  direct (no escrow)
+    [%accepted %cancelled]             %.y
+    [%escrow-proposed %escrow-agreed]  %.y  ::  seller agrees to escrow
+    [%escrow-proposed %cancelled]      %.y
+    [%escrow-agreed %invoiced]         %.y  ::  proceed to invoice after escrow setup
+    [%escrow-agreed %cancelled]        %.y
+    [%invoiced %paid]                  %.y
+    [%invoiced %cancelled]             %.y
+    [%paid %escrowed]                  %.y
+    [%escrowed %fulfilled]             %.y
+    [%escrowed %disputed]              %.y
+    [%fulfilled %completed]            %.y
+    [%fulfilled %disputed]             %.y
+    [%disputed %resolved]              %.y
+    [%disputed %escrowed]              %.y  ::  dismissed dispute returns to escrowed
+    [%completed %completed]            %.y
   ==
 ::
 +$  market-command
@@ -98,13 +105,19 @@
       [%invalid-transition thread-id=@uv from=order-status to=order-status]
   ==
 ::
++$  state-1
+  $:  %1
+      orders=(map @uv order)
+      listings=(map listing-id listing)
+  ==
+::
 +$  state-0
   $:  %0
       orders=(map @uv order)
       listings=(map listing-id listing)
   ==
 ::
-+$  current-state  state-0
++$  current-state  state-1
 +$  card  card:agent:gall
 ::
 ++  event-card
@@ -149,7 +162,13 @@
 ++  on-load
   |=  old=vase
   ^-  (quip card _this)
-  =.  state  !<(current-state old)
+  =/  ver  ;;(@ud -.q.old)
+  =.  state
+    ?:  =(ver 1)  !<(state-1 old)
+    ?:  =(ver 0)
+      =/  s0  !<(state-0 old)
+      [%1 orders.s0 listings.s0]
+    *state-1
   `this
 ::
 ++  on-poke
@@ -181,6 +200,8 @@
         %advance
       =/  ord=(unit order)  (~(get by orders.state) thread-id.cmd)
       ?~  ord  `this
+      ::  no-op if already at target status
+      ?:  =(order-status.u.ord to.cmd)  `this
       ?.  (valid-transition order-status.u.ord to.cmd)
         :-  [(event-card [%invalid-transition thread-id.cmd order-status.u.ord to.cmd])]~
         this

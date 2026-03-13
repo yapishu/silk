@@ -403,6 +403,17 @@ tr:hover td {
   border-color: #d63b54;
 }
 
+.btn-danger {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #a93226;
+  border-color: #a93226;
+}
+
 .btn-sm {
   padding: 5px 12px;
   font-size: 12px;
@@ -557,6 +568,12 @@ tr:hover td {
   color: var(--text-muted);
   text-transform: uppercase;
   margin-left: 4px;
+}
+
+.listing-card .listing-inventory {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-left: 6px;
 }
 
 .listing-card .listing-meta {

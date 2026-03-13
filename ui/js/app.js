@@ -12,12 +12,15 @@ const App = {
     reputation: [],
     attestations: [],
     peers: [],
+    moderators: [],
     stats: { nyms: 0, listings: 0, threads: 0, orders: 0, peers: 0 },
     relays: [],
     skeinStats: {},
     skeinHealth: [],
     skeinTrusted: [],
     skeinChannels: {},
+    myEscrows: [],
+    zenithAccounts: [],
     loading: true,
     dialog: null,
     threadsPage: 0,
@@ -53,6 +56,9 @@ const App = {
         SilkAPI.getSkeinHealth(), // 9
         SilkAPI.getSkeinTrusted(),// 10
         SilkAPI.getSkeinChannels(),// 11
+        SilkAPI.getModerators(),  // 12
+        SilkAPI.getMyEscrows(),  // 13
+        SilkAPI.getZenithAccounts(), // 14
       ]);
       const errors = [];
       const get = (i) => {
@@ -88,6 +94,12 @@ const App = {
       if (skeinHealth)   this.state.skeinHealth = skeinHealth || [];
       if (skeinTrusted)  this.state.skeinTrusted = skeinTrusted || [];
       if (skeinChannels) this.state.skeinChannels = skeinChannels || {};
+      const moderators = get(12);
+      if (moderators)    this.state.moderators = moderators.moderators || [];
+      const myEscrows = get(13);
+      if (myEscrows)     this.state.myEscrows = myEscrows.escrows || [];
+      const zenithAccounts = get(14);
+      if (zenithAccounts) this.state.zenithAccounts = zenithAccounts.accounts || [];
       this.state.apiErrors = errors;
       if (errors.length) console.warn('silk: API errors:', errors);
     } catch (e) {
@@ -144,6 +156,15 @@ const App = {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   },
 
+  fmtTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return sameDay ? time : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  },
+
   fmtPrice(amount) {
     return `${amount} sZ`;
   },
@@ -152,6 +173,8 @@ const App = {
 
   render() {
     const app = document.getElementById('app');
+    const main = app.querySelector('.main');
+    const scrollTop = main ? main.scrollTop : 0;
     app.innerHTML = `
       ${this.renderSidebar()}
       <div class="main">
@@ -159,6 +182,8 @@ const App = {
       </div>
       ${this.renderDialog()}
     `;
+    const newMain = app.querySelector('.main');
+    if (newMain) newMain.scrollTop = scrollTop;
     this.bindEvents();
   },
 
@@ -170,6 +195,7 @@ const App = {
       { id: 'threads',     icon: '\u2261', label: 'Threads' },
       { id: 'orders',      icon: '\u25CE', label: 'Orders' },
       { id: 'reputation',  icon: '\u2605', label: 'Reputation' },
+      { id: 'moderators', icon: '\u2696', label: 'Moderators' },
       { id: 'network',     icon: '\u2B21', label: 'Network' },
     ];
     return `
@@ -205,6 +231,7 @@ const App = {
       case 'threads':     return this.renderThreads();
       case 'orders':      return this.renderOrders();
       case 'reputation':  return this.renderReputation();
+      case 'moderators': return this.renderModerators();
       case 'network':     return this.renderNetwork();
       default:            return this.renderDashboard();
     }
@@ -244,6 +271,10 @@ const App = {
           <div class="stat-card">
             <div class="stat-label">Peers</div>
             <div class="stat-value">${s.peers || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Moderators</div>
+            <div class="stat-value">${s.moderators || 0}</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Relays</div>
@@ -407,6 +438,7 @@ const App = {
                 <div>
                   <span class="listing-price">${l.price}</span>
                   <span class="listing-currency">${l.currency}</span>
+                  ${l.inventory > 0 ? `<span class="listing-inventory">&middot; ${l.inventory} left</span>` : ''}
                 </div>
                 <div class="listing-meta">
                   <span class="listing-seller">${l.seller_label ? this.esc(l.seller_label) : this.shortId(l.seller)} ${repStr}</span>
@@ -537,6 +569,12 @@ const App = {
       'verdict': 'Verdict',
       'attest': 'Feedback',
       'ack': 'Ack',
+      'escrow-propose': 'Escrow Proposed',
+      'escrow-agree': 'Escrow Agreed',
+      'escrow-funded': 'Escrow Funded',
+      'escrow-sign-release': 'Release Sig',
+      'escrow-sign-refund': 'Refund Sig',
+      'moderator-profile': 'Moderator',
     };
     const label = typeLabels[m.type] || m.type;
     let detail = '';
@@ -551,10 +589,13 @@ const App = {
     else if (m.type === 'verdict') detail = `${m.ruling}${m.note ? ' \u2014 ' + this.esc(m.note) : ''}`;
 
     const dirIcon = direction === 'sent' ? '\u2191 ' : direction === 'received' ? '\u2193 ' : '';
+    const rawTs = m.at || m.timestamp || m.expires_at;
+    const ts = rawTs ? `<span class="msg-ts" style="font-size: 10px; color: var(--text-dim); margin-left: auto; white-space: nowrap;">${this.fmtTime(rawTs)}</span>` : '';
     return `
-      <div class="msg-row ${direction === 'sent' ? 'msg-mine' : ''}">
+      <div class="msg-row ${direction === 'sent' ? 'msg-mine' : ''}" style="display: flex; align-items: center; gap: 8px;">
         <span class="msg-type badge badge-${m.type === 'direct-message' ? 'open' : m.type}">${dirIcon}${label}</span>
         <span class="msg-detail">${detail}</span>
+        ${ts}
       </div>
     `;
   },
@@ -567,6 +608,8 @@ const App = {
     if (o.status === 'escrowed') return 3;
     if (o.status === 'paid') return 2;
     if (o.status === 'accepted' && o.has_invoice) return 1;
+    if (o.status === 'escrow-agreed') return 1;
+    if (o.status === 'escrow-proposed') return 0;
     return 0;
   },
 
@@ -574,30 +617,65 @@ const App = {
     const tid = o.thread_id;
     const s = o.status;
     const inv = o.has_invoice;
+    const cancelBtn = `<button class="btn btn-sm btn-ghost" data-action="open-cancel-thread" data-thread-id="${tid}">Cancel</button>`;
 
+    if (s === 'offered') {
+      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="accept-offer" data-thread-id="${tid}" data-offer-id="${tid}">Accept</button> ${cancelBtn}`, wait: '' };
+      return { btn: cancelBtn, wait: 'Waiting for seller to respond' };
+    }
     if (s === 'accepted' && !inv) {
-      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-send-invoice" data-thread-id="${tid}">Send Invoice</button>`, wait: '' };
-      return { btn: '', wait: 'Waiting for seller to send invoice' };
+      if (role === 'buyer') return {
+        btn: `<button class="btn btn-sm" data-action="open-propose-escrow" data-thread-id="${tid}">Propose Escrow</button> ${cancelBtn}`,
+        wait: 'You can propose escrow or wait for invoice',
+      };
+      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-send-invoice" data-thread-id="${tid}">Send Invoice</button> ${cancelBtn}`, wait: '' };
+      return { btn: cancelBtn, wait: 'Waiting for seller to send invoice' };
+    }
+    if (s === 'escrow-proposed') {
+      if (role === 'seller') return {
+        btn: `<button class="btn btn-sm btn-primary" data-action="agree-escrow" data-thread-id="${tid}">Agree to Escrow</button> ${cancelBtn}`,
+        wait: 'Buyer proposed escrow',
+      };
+      return { btn: cancelBtn, wait: 'Waiting for seller to agree to escrow' };
+    }
+    if (s === 'escrow-agreed') {
+      if (role === 'seller') return { btn: cancelBtn, wait: 'Escrow agreed \u2014 invoice auto-sent to multisig address' };
+      return { btn: cancelBtn, wait: 'Escrow agreed \u2014 waiting for invoice' };
     }
     if (s === 'accepted' && inv) {
       if (role === 'buyer') return {
-        btn: `<button class="btn btn-sm btn-primary" data-action="open-submit-payment" data-thread-id="${tid}">Submit Payment</button>`,
+        btn: `<button class="btn btn-sm btn-primary" data-action="open-pay-invoice" data-thread-id="${tid}">Pay via Zenith</button>
+              <button class="btn btn-sm" data-action="open-submit-payment" data-thread-id="${tid}">Manual TX</button> ${cancelBtn}`,
         wait: o.pay_address ? `Pay to: <span class="mono">${this.esc(o.pay_address)}</span>` : 'Invoice sent \u2014 awaiting zenith address...',
       };
-      return { btn: '', wait: 'Invoice sent \u2014 waiting for payment' };
+      return { btn: cancelBtn, wait: 'Invoice sent \u2014 waiting for payment' };
     }
     if (s === 'paid') {
       if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>`, wait: '' };
       return { btn: '', wait: 'Payment submitted \u2014 waiting for delivery' };
     }
     if (s === 'escrowed') {
-      if (role === 'seller') return { btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>`, wait: 'Payment escrowed' };
+      if (role === 'seller') return {
+        btn: `<button class="btn btn-sm btn-primary" data-action="open-mark-fulfilled" data-thread-id="${tid}">Mark Fulfilled</button>
+              <button class="btn btn-sm btn-danger" data-action="open-file-dispute" data-thread-id="${tid}">File Dispute</button>`,
+        wait: 'Payment escrowed',
+      };
+      if (role === 'buyer') return {
+        btn: `<button class="btn btn-sm" data-action="refund-escrow" data-thread-id="${tid}">Request Refund</button>
+              <button class="btn btn-sm btn-danger" data-action="open-file-dispute" data-thread-id="${tid}">File Dispute</button>`,
+        wait: 'Payment escrowed \u2014 waiting for delivery',
+      };
       return { btn: '', wait: 'Payment escrowed \u2014 waiting for delivery' };
     }
     if (s === 'fulfilled') {
       if (role === 'buyer') return {
-        btn: `<button class="btn btn-sm btn-primary" data-action="confirm-complete" data-thread-id="${tid}">Confirm Receipt</button>`,
+        btn: `<button class="btn btn-sm btn-primary" data-action="confirm-complete" data-thread-id="${tid}">Confirm Receipt</button>
+              <button class="btn btn-sm btn-danger" data-action="open-file-dispute" data-thread-id="${tid}">File Dispute</button>`,
         wait: '',
+      };
+      if (role === 'seller') return {
+        btn: `<button class="btn btn-sm btn-danger" data-action="open-file-dispute" data-thread-id="${tid}">File Dispute</button>`,
+        wait: 'Delivered \u2014 waiting for buyer confirmation',
       };
       return { btn: '', wait: 'Delivered \u2014 waiting for buyer confirmation' };
     }
@@ -605,7 +683,18 @@ const App = {
       btn: `<button class="btn btn-sm" data-action="open-leave-feedback" data-thread-id="${tid}">Leave Feedback</button>`,
       wait: 'Order complete',
     };
-    if (s === 'disputed') return { btn: '', wait: 'Dispute in progress' };
+    if (s === 'disputed') {
+      if (role === 'buyer') return {
+        btn: `<button class="btn btn-sm" data-action="refund-escrow" data-thread-id="${tid}">Sign Refund</button>`,
+        wait: 'Dispute in progress \u2014 awaiting moderator ruling',
+      };
+      if (role === 'seller') return {
+        btn: `<button class="btn btn-sm" data-action="release-escrow" data-thread-id="${tid}">Sign Release</button>
+              <button class="btn btn-sm btn-ghost" data-action="refund-escrow" data-thread-id="${tid}">Agree to Refund</button>`,
+        wait: 'Dispute in progress \u2014 awaiting moderator ruling',
+      };
+      return { btn: '', wait: 'Dispute in progress' };
+    }
     if (s === 'resolved') return { btn: '', wait: 'Dispute resolved' };
     if (s === 'cancelled') return { btn: '', wait: 'Cancelled' };
     return { btn: '', wait: '' };
@@ -616,7 +705,7 @@ const App = {
     const myNymIds = new Set(this.state.nyms.map(n => n.id));
     const PAGE = 10;
     const page = this.state.ordersPage || 0;
-    const all = this.state.orders;
+    const all = [...this.state.orders].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     const paged = all.slice(page * PAGE, (page + 1) * PAGE);
     const totalPages = Math.ceil(all.length / PAGE);
     return `
@@ -647,7 +736,7 @@ const App = {
                         ${role === 'buyer' ? 'You are the buyer' : role === 'seller' ? 'You are the seller' : this.shortId(o.thread_id)}
                       </div>
                     </div>
-                    <span class="badge badge-${o.status}">${o.status}${o.status === 'accepted' && o.has_invoice ? ' (invoiced)' : ''}</span>
+                    <span class="badge badge-${o.status.replace('escrow-','')}">${o.status}${o.status === 'accepted' && o.has_invoice ? ' (invoiced)' : ''}</span>
                   </div>
                   ${!['disputed','resolved','cancelled'].includes(o.status) ? `
                   <div class="order-timeline">
@@ -679,14 +768,29 @@ const App = {
                     <div style="margin-top: 8px; padding: 10px; border-radius: var(--radius); background: var(--purple-dim); border: 1px solid rgba(139,92,246,0.2); font-size: 12px;">
                       <strong style="color: var(--purple);">Escrow:</strong>
                       <span style="color: var(--text);">${o.escrow.status}</span>
-                      ${o.escrow.tx_hash ? ` &middot; tx: <span class="mono">${this.shortId(o.escrow.tx_hash)}</span>` : ''}
-                      ${o.escrow.amount ? ` &middot; ${o.escrow.amount} ${o.escrow.currency || 'sZ'}` : ''}
+                      ${o.escrow.amount ? ` &middot; ${o.escrow.amount} ${o.escrow.currency || '$sZ'}` : ''}
+                      ${o.escrow.sigs_collected != null ? ` &middot; sigs: ${o.escrow.sigs_collected}/2` : ''}
+                      ${o.escrow.moderator_id ? ` &middot; moderator: <span class="mono">${this.shortId(o.escrow.moderator_id)}</span>` : ''}
+                      ${o.escrow.multisig_address ? `
+                        <div style="margin-top: 6px; padding: 6px 8px; background: var(--bg-inset); border-radius: 4px; cursor: pointer;" onclick="navigator.clipboard.writeText('${o.escrow.multisig_address}').then(() => App.toast('Multisig address copied'))" title="Click to copy">
+                          <span style="color: var(--text-dim);">Multisig:</span> <span class="mono" style="color: var(--text-bright);">${this.esc(o.escrow.multisig_address)}</span>
+                        </div>
+                      ` : ''}
+                      ${o.escrow.tx_hex ? `
+                        <div style="margin-top: 6px;">
+                          <div style="color: var(--accent); font-weight: 600; margin-bottom: 4px;">TX Ready for Broadcast</div>
+                          <div class="mono" style="font-size: 11px; word-break: break-all; background: var(--bg-inset); padding: 6px; border-radius: 4px; max-height: 60px; overflow-y: auto; cursor: pointer;" onclick="navigator.clipboard.writeText('${o.escrow.tx_hex}').then(() => App.toast('TX hex copied'))" title="Click to copy">
+                            ${o.escrow.tx_hex.slice(0, 100)}${o.escrow.tx_hex.length > 100 ? '...' : ''}
+                          </div>
+                          <button class="btn btn-sm btn-primary" style="margin-top: 6px;" data-action="rebroadcast-escrow" data-thread-id="${o.thread_id}">Broadcast TX</button>
+                        </div>
+                      ` : ''}
                     </div>
                   ` : ''}
-                  ${o.seller_wallet ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Seller wallet: <span class="mono">${this.esc(o.seller_wallet)}</span></div>` : ''}
+                  ${o.pay_address ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Pay address: <span class="mono">${this.esc(o.pay_address)}</span></div>` : ''}
                   ${o.verification ? `
                     <div style="margin-top: 8px; padding: 8px; border-radius: var(--radius); font-size: 12px; background: ${o.verification.verified ? 'rgba(76,175,80,0.1)' : 'rgba(233,69,96,0.1)'}; border: 1px solid ${o.verification.verified ? 'rgba(76,175,80,0.3)' : 'rgba(233,69,96,0.3)'};">
-                      ${o.verification.verified ? '\u2713 Payment verified' : '\u2717 Payment NOT verified'} &mdash; Seller balance: ${o.verification.balance} sZ (checked ${this.fmtDate(o.verification.checked_at)})
+                      ${o.verification.verified ? '\u2713 Payment verified' : '\u2717 Payment NOT verified'} &mdash; Address balance: ${o.verification.balance} sZ (checked ${this.fmtDate(o.verification.checked_at)})
                     </div>
                   ` : ''}
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; min-height: 32px;">
@@ -773,6 +877,124 @@ const App = {
             </table>
           </div>
         ` : ''}
+      </div>
+    `;
+  },
+
+  // ---- moderators ----
+
+  renderModerators() {
+    const mods = this.state.moderators || [];
+    return `
+      <div class="page-header">
+        <h2>Moderators</h2>
+        <div class="page-desc">Dispute resolvers for escrow transactions</div>
+      </div>
+      <div class="page-content">
+        <div style="margin-bottom: 20px; display: flex; gap: 8px;">
+          <button class="btn btn-primary" data-action="open-register-moderator">+ Register as Moderator</button>
+        </div>
+        ${mods.length ? `
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            ${mods.map(m => {
+              const nymObj = this.state.nyms.find(n => n.id === m.nym_id);
+              const nymLabel = nymObj ? this.esc(nymObj.label) : this.shortId(m.nym_id);
+              const feePct = (m.fee_bps / 100).toFixed(1);
+              return `
+                <div class="card">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                      <div style="font-size: 15px; font-weight: 600; color: var(--text-bright);">
+                        ${nymLabel}
+                        <span style="font-size: 12px; font-weight: 400; color: var(--text-muted); margin-left: 8px;">fee: ${feePct}%</span>
+                      </div>
+                      <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                        ${this.esc(m.description || 'No description')}
+                      </div>
+                      <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+                        <span class="mono">addr: ${this.shortId(m.address)}</span>
+                        &middot; stake: ${m.stake_amount || 0} sZ
+                        &middot; pubkey: ${this.shortId(m.pubkey)}
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                      <span class="badge badge-accepted">active</span>
+                      ${nymObj ? `<button class="btn btn-sm btn-ghost" data-action="retract-moderator" data-id="${m.id}">retract</button>` : ''}
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : `
+          <div class="empty-state">
+            <div class="empty-icon">\u2696</div>
+            <div class="empty-text">No moderators registered yet</div>
+          </div>
+        `}
+        ${this.renderMyEscrows()}
+      </div>
+    `;
+  },
+
+  renderMyEscrows() {
+    const escrows = this.state.myEscrows || [];
+    return `
+      <div style="margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px;">
+        <h3 style="font-size: 16px; font-weight: 600; color: var(--text-bright); margin-bottom: 12px;">My Escrows (Moderator)
+          ${escrows.filter(e => e.status === 'disputed').length ? `<span class="badge badge-disputed" style="margin-left: 8px;">${escrows.filter(e => e.status === 'disputed').length} disputed</span>` : ''}
+        </h3>
+        ${!escrows.length ? `
+          <div class="empty-state" style="padding: 20px;">
+            <div class="empty-text">No escrows assigned to you yet. When a buyer proposes escrow with you as moderator, it will appear here.</div>
+          </div>
+        ` : `
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          ${escrows.map(e => {
+            const canSign = ['disputed', 'releasing', 'refunding', 'funded'].includes(e.status);
+            return `
+              <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                  <div>
+                    <div style="font-size: 13px; color: var(--text-muted);">
+                      Thread: <span class="mono">${this.shortId(e.thread_id)}</span>
+                    </div>
+                    <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+                      Buyer: <span class="mono">${this.shortId(e.buyer || '')}</span>
+                      &middot; Seller: <span class="mono">${this.shortId(e.seller || '')}</span>
+                    </div>
+                    <div style="font-size: 14px; font-weight: 600; color: var(--text-bright); margin-top: 6px;">
+                      ${e.amount} ${e.currency}
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+                      Multisig: <span class="mono">${e.multisig_address || 'not yet derived'}</span>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                      Sigs: ${e.sigs_collected}/2
+                      ${e.tx_hex ? ` &middot; <span style="color: var(--accent);">TX ready</span>` : ''}
+                    </div>
+                    ${e.tx_hex ? `
+                      <div style="margin-top: 8px;">
+                        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Broadcast TX hex:</div>
+                        <div class="mono" style="font-size: 11px; word-break: break-all; background: var(--bg-inset); padding: 8px; border-radius: 6px; max-height: 80px; overflow-y: auto; cursor: pointer;" onclick="navigator.clipboard.writeText('${e.tx_hex}').then(() => App.toast('TX hex copied'))">
+                          ${e.tx_hex.slice(0, 120)}${e.tx_hex.length > 120 ? '...' : ''}
+                        </div>
+                      </div>
+                    ` : ''}
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end;">
+                    <span class="badge badge-${e.status === 'disputed' ? 'disputed' : e.status === 'released' || e.status === 'refunded' ? 'completed' : 'accepted'}">${e.status}</span>
+                    ${canSign ? `
+                      <button class="btn btn-sm btn-primary" data-action="mod-sign-release" data-tid="${e.thread_id}">Sign Release</button>
+                      <button class="btn btn-sm btn-ghost" data-action="mod-sign-refund" data-tid="${e.thread_id}">Sign Refund</button>
+                    ` : ''}
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        `}
       </div>
     `;
   },
@@ -977,6 +1199,10 @@ const App = {
     let content = '';
 
     if (name === 'create-nym') {
+      const accs = this.state.zenithAccounts || [];
+      const accOpts = accs.map(a =>
+        `<option value="${this.esc(a.address)}">${this.esc(a.name)} (${this.esc(a.address)})</option>`
+      ).join('');
       content = `
         <h3>Create Identity</h3>
         <div style="margin-bottom: 12px; font-size: 13px; color: var(--text-muted);">
@@ -987,8 +1213,17 @@ const App = {
           <input type="text" id="nym-label" placeholder="my-vendor-name" autofocus>
         </div>
         <div class="form-group">
-          <label>Zenith Wallet Address</label>
-          <input type="text" id="nym-wallet" placeholder="zenith1...">
+          <label>Zenith Wallet</label>
+          ${accs.length ? `
+            <select id="nym-wallet-select">
+              <option value="">-- Select wallet --</option>
+              ${accOpts}
+              <option value="__manual__">Enter address manually...</option>
+            </select>
+            <input type="text" id="nym-wallet-manual" placeholder="zenith1..." style="display:none; margin-top:8px;">
+          ` : `
+            <input type="text" id="nym-wallet-manual" placeholder="zenith1...">
+          `}
         </div>
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
@@ -1018,6 +1253,10 @@ const App = {
         <div class="form-group">
           <label>Price (sZ)</label>
           <input type="number" id="listing-price" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label>Inventory (0 = unlimited)</label>
+          <input type="number" id="listing-inventory" value="0" min="0">
         </div>
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
@@ -1068,6 +1307,24 @@ const App = {
         <div class="form-actions">
           <button class="btn" data-action="close-dialog">Cancel</button>
           <button class="btn btn-primary" data-action="submit-add-peer">Add Peer</button>
+        </div>
+      `;
+    }
+
+    if (name === 'cancel-thread') {
+      content = `
+        <h3>Cancel Order</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Cancel this order. Both parties will be notified.
+        </div>
+        <div class="form-group">
+          <label>Reason (optional)</label>
+          <input type="text" id="cancel-reason" placeholder="Changed my mind..." autofocus>
+        </div>
+        <input type="hidden" id="cancel-thread-id" value="${data.threadId || ''}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Back</button>
+          <button class="btn btn-danger" data-action="submit-cancel-thread">Cancel Order</button>
         </div>
       `;
     }
@@ -1244,6 +1501,96 @@ const App = {
       `;
     }
 
+    if (name === 'register-moderator') {
+      const nymOpts = this.state.nyms.map(n =>
+        `<option value="${n.id}">${this.esc(n.label)}</option>`
+      ).join('');
+      content = `
+        <h3>Register as Moderator</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Register one of your identities as an escrow dispute moderator. You must have a Zenith wallet with staked funds.
+        </div>
+        <div class="form-group">
+          <label>Identity</label>
+          <select id="mod-nym">${nymOpts || '<option value="">no identities</option>'}</select>
+        </div>
+        <div class="form-group">
+          <label>Fee (basis points, 200 = 2%)</label>
+          <input type="number" id="mod-fee-bps" value="200" min="0" max="10000">
+        </div>
+        <div class="form-group">
+          <label>Stake Amount (sZ)</label>
+          <input type="number" id="mod-stake" value="0" min="0">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="mod-description" placeholder="Describe your moderation services..."></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-register-moderator">Register</button>
+        </div>
+      `;
+    }
+
+    if (name === 'pay-invoice') {
+      const accs = this.state.zenithAccounts || [];
+      const accOpts = accs.map(a =>
+        `<option value="${this.esc(a.name)}">${this.esc(a.name)} (${this.esc(a.address)})</option>`
+      ).join('');
+      content = `
+        <h3>Pay via Zenith</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Send payment from a Zenith wallet. The balance will be polled automatically to confirm.
+        </div>
+        <div class="form-group">
+          <label>Pay From Account</label>
+          ${accs.length ? `
+            <select id="pay-account">
+              ${accOpts}
+            </select>
+          ` : `
+            <input type="text" id="pay-account" placeholder="account name" value="default">
+            <div style="font-size: 11px; color: var(--amber); margin-top: 4px;">No Zenith accounts found. Enter account name manually.</div>
+          `}
+        </div>
+        <input type="hidden" id="pay-thread-id" value="${data.threadId || ''}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-pay-invoice">Send Payment</button>
+        </div>
+      `;
+    }
+
+    if (name === 'propose-escrow') {
+      const mods = this.state.moderators || [];
+      const modOpts = mods.map(m => {
+        const nymObj = this.state.nyms.find(n => n.id === m.nym_id);
+        const label = nymObj ? this.esc(nymObj.label) : this.shortId(m.nym_id);
+        const feePct = (m.fee_bps / 100).toFixed(1);
+        return `<option value="${m.id}">${label} (${feePct}% fee, ${m.stake_amount || 0} sZ staked)</option>`;
+      }).join('');
+      content = `
+        <h3>Propose Escrow</h3>
+        <div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
+          Propose 2-of-3 multisig escrow with a moderator. The seller must agree before proceeding.
+        </div>
+        <div class="form-group">
+          <label>Moderator</label>
+          <select id="escrow-moderator">${modOpts || '<option value="">no moderators available</option>'}</select>
+        </div>
+        <div class="form-group">
+          <label>Timeout (hours)</label>
+          <input type="number" id="escrow-timeout" value="72" min="1">
+        </div>
+        <input type="hidden" id="escrow-thread-id" value="${data.threadId || ''}">
+        <div class="form-actions">
+          <button class="btn" data-action="close-dialog">Cancel</button>
+          <button class="btn btn-primary" data-action="submit-propose-escrow">Propose</button>
+        </div>
+      `;
+    }
+
     return `
       <div class="dialog-overlay" data-action="close-dialog-bg">
         <div class="dialog" onclick="event.stopPropagation()">
@@ -1263,12 +1610,16 @@ const App = {
           case 'open-create-nym':
             this.openDialog('create-nym');
             break;
-          case 'submit-create-nym':
+          case 'submit-create-nym': {
+            const sel = document.getElementById('nym-wallet-select');
+            const manual = document.getElementById('nym-wallet-manual');
+            const wallet = sel ? (sel.value === '__manual__' ? manual.value : sel.value) : (manual ? manual.value : '');
             this.action(() => SilkAPI.createNym(
               document.getElementById('nym-label').value,
-              document.getElementById('nym-wallet').value
+              wallet
             ));
             break;
+          }
           case 'drop-nym':
             if (confirm('Delete this identity?')) {
               this.action(() => SilkAPI.dropNym(el.dataset.id));
@@ -1282,8 +1633,9 @@ const App = {
               document.getElementById('listing-title').value,
               document.getElementById('listing-desc').value,
               parseInt(document.getElementById('listing-price').value) || 0,
-              'sZ',
+              '$sZ',
               document.getElementById('listing-nym').value,
+              parseInt(document.getElementById('listing-inventory').value) || 0,
             ));
             break;
           case 'sync-catalog':
@@ -1302,7 +1654,7 @@ const App = {
               document.getElementById('offer-listing-id').value,
               document.getElementById('offer-seller').value,
               parseInt(document.getElementById('offer-amount').value) || 0,
-              'sZ',
+              '$sZ',
               document.getElementById('offer-nym').value,
             ));
             break;
@@ -1311,6 +1663,15 @@ const App = {
             break;
           case 'reject-offer':
             this.action(() => SilkAPI.rejectOffer(el.dataset.threadId, el.dataset.offerId, 'declined'));
+            break;
+          case 'open-cancel-thread':
+            this.openDialog('cancel-thread', { threadId: el.dataset.threadId });
+            break;
+          case 'submit-cancel-thread':
+            this.action(() => SilkAPI.cancelThread(
+              document.getElementById('cancel-thread-id').value,
+              document.getElementById('cancel-reason').value || 'cancelled',
+            ));
             break;
           case 'open-send-invoice':
             this.openDialog('send-invoice', { threadId: el.dataset.threadId });
@@ -1351,6 +1712,18 @@ const App = {
               else this.toast('Verification queued \u2014 refresh in a moment', '');
             });
             break;
+          case 'open-pay-invoice':
+            this.openDialog('pay-invoice', { threadId: el.dataset.threadId });
+            break;
+          case 'submit-pay-invoice': {
+            const acc = document.getElementById('pay-account').value;
+            const tid = document.getElementById('pay-thread-id').value;
+            this.action(async () => {
+              await SilkAPI.payInvoice(tid, acc);
+              this.toast('Payment sent \u2014 polling for confirmation...', 'success');
+            });
+            break;
+          }
           case 'open-send-message':
             this.openDialog('send-message', JSON.parse(el.dataset.listing));
             break;
@@ -1429,6 +1802,71 @@ const App = {
           case 'submit-add-seed':
             this.action(() => SilkAPI.addSeed(document.getElementById('seed-ship').value));
             break;
+          case 'open-register-moderator':
+            this.openDialog('register-moderator');
+            break;
+          case 'submit-register-moderator':
+            this.action(() => SilkAPI.registerModerator(
+              document.getElementById('mod-nym').value,
+              parseInt(document.getElementById('mod-fee-bps').value) || 200,
+              parseInt(document.getElementById('mod-stake').value) || 0,
+              document.getElementById('mod-description').value,
+            ));
+            break;
+          case 'retract-moderator':
+            if (confirm('Retract this moderator registration?')) {
+              this.action(() => SilkAPI.retractModerator(el.dataset.id));
+            }
+            break;
+          case 'open-propose-escrow':
+            this.openDialog('propose-escrow', { threadId: el.dataset.threadId });
+            break;
+          case 'submit-propose-escrow':
+            {
+              const hours = parseInt(document.getElementById('escrow-timeout').value) || 72;
+              const timeoutSecs = hours * 3600;
+              this.action(() => SilkAPI.proposeEscrow(
+                document.getElementById('escrow-thread-id').value,
+                document.getElementById('escrow-moderator').value,
+                timeoutSecs,
+              ));
+            }
+            break;
+          case 'agree-escrow':
+            this.action(() => SilkAPI.agreeEscrow(el.dataset.threadId));
+            break;
+          case 'release-escrow':
+            if (confirm('Release escrow funds to seller?')) {
+              this.action(() => SilkAPI.releaseEscrow(el.dataset.threadId));
+            }
+            break;
+          case 'refund-escrow':
+            if (confirm('Request escrow refund?')) {
+              this.action(() => SilkAPI.refundEscrow(el.dataset.threadId));
+            }
+            break;
+          case 'mod-sign-release':
+            if (confirm('Sign release as moderator? Funds will go to seller.')) {
+              this.action(() => SilkAPI.signEscrow(el.dataset.tid, 'release'));
+            }
+            break;
+          case 'mod-sign-refund':
+            if (confirm('Sign refund as moderator? Funds will go to buyer.')) {
+              this.action(() => SilkAPI.signEscrow(el.dataset.tid, 'refund'));
+            }
+            break;
+          case 'rebroadcast-escrow':
+            this.action(() => SilkAPI.rebroadcastEscrow(el.dataset.threadId));
+            break;
+          case 'open-file-dispute': {
+            const tid = el.dataset.threadId;
+            const reason = prompt('Describe why you are disputing this order:');
+            if (!reason) break;
+            const order = this.state.orders.find(o => o.thread_id === tid);
+            const nym = order ? order.buyer : '';
+            this.action(() => SilkAPI.fileDispute(tid, reason, nym));
+            break;
+          }
           case 'threads-prev':
             this.state.threadsPage = Math.max(0, (this.state.threadsPage || 0) - 1);
             this.render();
@@ -1452,6 +1890,14 @@ const App = {
         }
       });
     });
+    // wallet select toggle for manual entry
+    const walletSel = document.getElementById('nym-wallet-select');
+    if (walletSel) {
+      walletSel.addEventListener('change', () => {
+        const manual = document.getElementById('nym-wallet-manual');
+        if (manual) manual.style.display = walletSel.value === '__manual__' ? '' : 'none';
+      });
+    }
   },
 
   esc(str) {

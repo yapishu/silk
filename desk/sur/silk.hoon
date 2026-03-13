@@ -71,6 +71,65 @@
       [%catalog-request from-ship=@p]
       [%catalog listings=(list listing) routes=(list nym-route)]
       [%listing-retracted id=listing-id]
+      ::  moderator gossip
+      [%moderator-profile =moderator-profile]
+      [%moderator-retracted id=moderator-id]
+      ::  escrow protocol
+      [%escrow-propose thread-id=@uv buyer-pubkey=@ux moderator=moderator-id timeout=@dr buyer-wallet=@t]
+      [%escrow-agree thread-id=@uv seller-pubkey=@ux seller-wallet=@t]
+      [%escrow-funded thread-id=@uv tx-hash=@t]
+      [%escrow-sign-release thread-id=@uv sig=@ux signer-idx=@ud]
+      [%escrow-sign-refund thread-id=@uv sig=@ux signer-idx=@ud]
+      ::  moderator notifications
+      [%escrow-notify =escrow-config buyer=nym-id seller=nym-id]
+      [%escrow-dispute thread-id=@uv =dispute]
+      [%escrow-assembled thread-id=@uv result=escrow-st tx-hex=@t]
+  ==
+::
+::  moderator: trusted marketplace dispute resolver
+::
++$  moderator-id  @uv
++$  moderator-profile
+  $:  id=moderator-id
+      =nym-id                    ::  pseudonym operating as moderator
+      pubkey=@ux                 ::  secp256k1 compressed pubkey
+      address=@t                 ::  zenith bech32 (derived from pubkey)
+      fee-bps=@ud                ::  fee in basis points (200 = 2%)
+      stake-amount=@ud           ::  claimed stake amount in sZ
+      stake-sig=@ux              ::  signature of moderator-id by stake key
+      description=@t
+      created-at=@da
+  ==
+::
+::  escrow: 2-of-3 multisig escrow configuration
+::
++$  escrow-config
+  $:  =thread-id
+      buyer-pubkey=@ux
+      seller-pubkey=@ux
+      moderator-pubkey=@ux
+      =moderator-id
+      multisig-address=@t        ::  derived 2-of-3 address
+      amount=@ud
+      currency=@tas
+      timeout=@dr                ::  auto-refund after this
+      moderator-fee-bps=@ud
+      account-number=@ud         ::  chain account number (0 for MVP)
+      sequence=@ud               ::  chain tx sequence (0 for first tx)
+      buyer-wallet=@t            ::  buyer zenith address (for refund)
+      seller-wallet=@t           ::  seller zenith address (for release)
+  ==
+::
++$  escrow-st
+  $?  %proposed        ::  buyer proposed escrow + moderator
+      %agreed          ::  seller agreed, multisig derived
+      %funded          ::  buyer deposited, verified on chain
+      %releasing       ::  collecting release signatures
+      %released        ::  funds released to seller
+      %refunding       ::  collecting refund signatures
+      %refunded        ::  funds returned to buyer
+      %disputed        ::  dispute filed, moderator involved
+      %resolved        ::  moderator ruled, executing verdict
   ==
 ::
 ::  listing: a storefront advertisement
@@ -233,6 +292,16 @@
       ::  disputes
       [%file-dispute =dispute]
       [%submit-verdict =verdict]
+      ::  moderators
+      [%register-moderator =moderator-profile]
+      [%retract-moderator id=moderator-id]
+      ::  escrow
+      [%propose-escrow thread-id=@uv moderator=moderator-id timeout=@dr]
+      [%agree-escrow thread-id=@uv]
+      [%fund-escrow thread-id=@uv tx-hash=@t]
+      [%release-escrow thread-id=@uv]
+      [%refund-escrow thread-id=@uv]
+      [%rebroadcast-escrow thread-id=@uv]
   ==
 ::
 ::  events from silk-core
@@ -249,6 +318,16 @@
       [%peer-added ship=@p]
       [%peer-removed ship=@p]
       [%catalog-received count=@ud]
+      [%moderator-registered =moderator-profile]
+      [%moderator-retracted id=moderator-id]
+      [%escrow-proposed thread-id=@uv =escrow-config]
+      [%escrow-agreed thread-id=@uv multisig-address=@t]
+      [%escrow-funded thread-id=@uv]
+      [%escrow-releasing thread-id=@uv]
+      [%escrow-released thread-id=@uv]
+      [%escrow-refunding thread-id=@uv]
+      [%escrow-refunded thread-id=@uv]
+      [%escrow-assembled thread-id=@uv result=escrow-st]
   ==
 ::
 ::  destination: how to reach a pseudonym over skein

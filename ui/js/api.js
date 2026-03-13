@@ -33,10 +33,13 @@ window.SilkAPI = {
   createNym(label, wallet)  { return this.post({ action: 'create-nym', label, wallet }); },
   dropNym(id)       { return this.post({ action: 'drop-nym', id }); },
 
-  postListing(title, description, price, currency, nym) {
-    return this.post({ action: 'post-listing', title, description, price, currency, nym });
+  postListing(title, description, price, currency, nym, inventory) {
+    return this.post({ action: 'post-listing', title, description, price, currency, nym, inventory: inventory || 0 });
   },
   retractListing(id) { return this.post({ action: 'retract-listing', id }); },
+  updateInventory(id, inventory) {
+    return this.post({ action: 'update-inventory', id, inventory });
+  },
 
   addPeer(ship)     { return this.post({ action: 'add-peer', ship }); },
   dropPeer(ship)    { return this.post({ action: 'drop-peer', ship }); },
@@ -51,12 +54,18 @@ window.SilkAPI = {
   rejectOffer(thread_id, offer_id, reason) {
     return this.post({ action: 'reject-offer', thread_id, offer_id, reason });
   },
+  cancelThread(thread_id, reason) {
+    return this.post({ action: 'cancel-thread', thread_id, reason });
+  },
 
   sendInvoice(thread_id) {
     return this.post({ action: 'send-invoice', thread_id });
   },
   submitPayment(thread_id, tx_hash) {
     return this.post({ action: 'submit-payment', thread_id, tx_hash });
+  },
+  payInvoice(thread_id, account) {
+    return this.post({ action: 'pay-invoice', thread_id, account: account || 'default' });
   },
   markFulfilled(thread_id, note) {
     return this.post({ action: 'mark-fulfilled', thread_id, note });
@@ -71,11 +80,54 @@ window.SilkAPI = {
   leaveFeedback(thread_id, score, note, nym) {
     return this.post({ action: 'leave-feedback', thread_id, score, note, nym });
   },
+  fileDispute(thread_id, reason, nym) {
+    return this.post({ action: 'file-dispute', thread_id, reason, nym });
+  },
   sendMessage(listing_id, nym, text) {
     return this.post({ action: 'send-message', listing_id, nym, text });
   },
   sendReply(thread_id, nym, text) {
     return this.post({ action: 'send-reply', thread_id, nym, text });
+  },
+
+  // zenith
+  getZenithAccounts() { return this.get('zenith-accounts'); },
+
+  // moderators
+  getModerators()   { return this.get('moderators'); },
+  getEscrow(thread_id) { return this.get(`escrow/${thread_id}`); },
+
+  registerModerator(nym_id, fee_bps, stake_amount, description) {
+    return this.post({ action: 'register-moderator', nym_id, fee_bps, stake_amount, description });
+  },
+  retractModerator(id) {
+    return this.post({ action: 'retract-moderator', id });
+  },
+
+  // escrow
+  getMyEscrows()    { return this.get('my-escrows'); },
+
+  signEscrow(thread_id, escrow_action) {
+    return this.post({ action: 'sign-escrow', thread_id, escrow_action });
+  },
+  rebroadcastEscrow(thread_id) {
+    return this.post({ action: 'rebroadcast-escrow', thread_id });
+  },
+
+  proposeEscrow(thread_id, moderator, timeout) {
+    return this.post({ action: 'propose-escrow', thread_id, moderator, timeout });
+  },
+  agreeEscrow(thread_id) {
+    return this.post({ action: 'agree-escrow', thread_id });
+  },
+  fundEscrow(thread_id, tx_hash) {
+    return this.post({ action: 'fund-escrow', thread_id, tx_hash });
+  },
+  releaseEscrow(thread_id) {
+    return this.post({ action: 'release-escrow', thread_id });
+  },
+  refundEscrow(thread_id) {
+    return this.post({ action: 'refund-escrow', thread_id });
   },
 
   // skein relay management (talks to skein API on same ship)
