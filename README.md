@@ -1,6 +1,6 @@
 # silk
 
-`%silk` is a decentralized marketplace protocol built on top of the `[skein](https://github.com/yapishu/skein)` mixnet. It separates transport identity, market pseudonyms, and payment identity, and it routes all peer traffic over `%skein` rather than direct ship-to-ship pokes.
+`%silk` is a decentralized marketplace protocol built on top of the [skein](https://github.com/yapishu/skein) mixnet. It separates transport identity, market pseudonyms, and payment identity, and it routes all peer traffic over `%skein` rather than direct ship-to-ship pokes.
 
 ## Current Status
 
