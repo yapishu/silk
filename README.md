@@ -38,7 +38,7 @@ Still not finished:
 
 Silk is intentionally split across two desks:
 
-- `../skein`: content-agnostic transport, routing, relay discovery, and delivery
+- [`%skein`](https://github.com/yapishu/skein): content-agnostic transport, routing, relay discovery, and delivery
 - `%silk`: marketplace semantics, pseudonyms, listings, negotiation, payment coordination, moderators, escrow, and reputation
 
 Silk also separates three identities:
