@@ -776,13 +776,17 @@ const App = {
                           <span style="color: var(--text-dim);">Multisig:</span> <span class="mono" style="color: var(--text-bright);">${this.esc(o.escrow.multisig_address)}</span>
                         </div>
                       ` : ''}
-                      ${o.escrow.tx_hex ? `
+                      ${o.escrow.tx_hex && o.escrow.status !== 'confirmed' ? `
                         <div style="margin-top: 6px;">
-                          <div style="color: var(--accent); font-weight: 600; margin-bottom: 4px;">TX Ready for Broadcast</div>
+                          <div style="color: var(--amber); font-weight: 600; margin-bottom: 4px;">TX Broadcast — awaiting confirmation</div>
                           <div class="mono" style="font-size: 11px; word-break: break-all; background: var(--bg-inset); padding: 6px; border-radius: 4px; max-height: 60px; overflow-y: auto; cursor: pointer;" onclick="navigator.clipboard.writeText('${o.escrow.tx_hex}').then(() => App.toast('TX hex copied'))" title="Click to copy">
                             ${o.escrow.tx_hex.slice(0, 100)}${o.escrow.tx_hex.length > 100 ? '...' : ''}
                           </div>
-                          <button class="btn btn-sm btn-primary" style="margin-top: 6px;" data-action="rebroadcast-escrow" data-thread-id="${o.thread_id}">Broadcast TX</button>
+                        </div>
+                      ` : ''}
+                      ${o.escrow.status === 'confirmed' ? `
+                        <div style="margin-top: 6px; padding: 8px; background: rgba(76,175,80,0.1); border: 1px solid rgba(76,175,80,0.3); border-radius: 4px;">
+                          <span style="color: #4CAF50; font-weight: 600;">&#10003; Escrow TX confirmed on chain</span>
                         </div>
                       ` : ''}
                     </div>

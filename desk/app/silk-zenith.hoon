@@ -213,10 +213,10 @@
     ::
         %broadcast-escrow
       ~&  [%silk-zenith %broadcasting-escrow-tx thread-id.cmd]
-      ::  poke %zenith agent to broadcast the signed tx via janus
-      =/  zen-card=card
-        [%pass /zenith/broadcast/[(scot %uv thread-id.cmd)] %agent [our.bowl %zenith] %poke %broadcast-raw-tx !>(tx-hex.cmd)]
-      :-  :~  zen-card
+      ::  run broadcast thread via khan directly (captures result)
+      =/  khan-card=card
+        [%pass /zenith/broadcast/[(scot %uv thread-id.cmd)] %arvo %k %fard %zenith %broadcast-raw-tx %noun !>(tx-hex.cmd)]
+      :-  :~  khan-card
               (event-card [%escrow-broadcast thread-id.cmd tx-hex.cmd])
           ==
       this
@@ -288,6 +288,23 @@
     ~&  [%silk-zenith %account-info tid acc-num.result seq-num.result]
     =/  poke-card=card
       [%pass /zenith/set-account %agent [our.bowl %silk-core] %poke %noun !>([%set-escrow-account tid acc-num.result seq-num.result])]
+    :-  [poke-card]~
+    this
+  ::
+      [%zenith %broadcast @ ~]
+    =/  tid=@uv  (slav %uv i.t.t.wire)
+    ?.  ?=([%khan %arow *] sign)  `this
+    =/  res=(each cage tang)  +>.sign
+    ?:  ?=(%| -.res)
+      ~&  [%silk-zenith %broadcast-failed tid]
+      :-  :~  [%pass /zenith/broadcast-fail %agent [our.bowl %silk-core] %poke %noun !>([%escrow-broadcast-fail tid])]
+          ==
+      this
+    =/  body=@t  !<(@t q.p.res)
+    ~&  [%silk-zenith %broadcast-result tid body]
+    ::  notify silk-core to start confirmation polling
+    =/  poke-card=card
+      [%pass /zenith/broadcast-ok %agent [our.bowl %silk-core] %poke %noun !>([%escrow-broadcast-ok tid body])]
     :-  [poke-card]~
     this
   ==

@@ -125,9 +125,10 @@
       %agreed          ::  seller agreed, multisig derived
       %funded          ::  buyer deposited, verified on chain
       %releasing       ::  collecting release signatures
-      %released        ::  funds released to seller
+      %released        ::  funds released to seller (tx broadcast)
       %refunding       ::  collecting refund signatures
-      %refunded        ::  funds returned to buyer
+      %refunded        ::  funds returned to buyer (tx broadcast)
+      %confirmed       ::  tx confirmed on chain
       %disputed        ::  dispute filed, moderator involved
       %resolved        ::  moderator ruled, executing verdict
   ==
@@ -328,6 +329,7 @@
       [%escrow-refunding thread-id=@uv]
       [%escrow-refunded thread-id=@uv]
       [%escrow-assembled thread-id=@uv result=escrow-st]
+      [%escrow-confirmed thread-id=@uv]
   ==
 ::
 ::  destination: how to reach a pseudonym over skein

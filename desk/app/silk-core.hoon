@@ -525,6 +525,22 @@
         =.  escrow-status.state  (~(put by escrow-status.state) tid %funded)
         (handle-command [%refund-escrow tid])
       ==
+    ::  escrow broadcast result — start confirmation polling
+    ?:  ?=([%escrow-broadcast-ok @ @] raw)
+      =/  [* tid=@uv body=@t]  raw
+      ~&  [%silk-escrow %broadcast-ok tid]
+      ::  start polling multisig balance for confirmation
+      =/  esc=(unit escrow-config)  (~(get by escrows.state) tid)
+      ?~  esc  `this
+      ?:  =('' multisig-address.u.esc)  `this
+      =/  poll-card=card
+        [%pass /escrow-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s5)]
+      :-  [poll-card]~
+      this
+    ?:  ?=([%escrow-broadcast-fail @] raw)
+      =/  [* tid=@uv]  raw
+      ~&  [%silk-escrow %broadcast-fail tid]
+      `this
     ::  channel peer notifications from skein
     ?:  ?=([%channel-join @ @] raw)
       =/  [* channel=@tas ship=@p]  raw
@@ -3331,6 +3347,64 @@
     =/  poll-card=card
       [%pass /zenith-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s10)]
     :-  ~[khan-card poll-card]
+    this
+  ::
+      [%escrow-poll @ ~]
+    ::  poll multisig balance to confirm escrow release/refund tx
+    =/  tid=@uv  (slav %uv i.t.wire)
+    ?.  ?=([%behn %wake *] sign)  `this
+    =/  esc=(unit escrow-config)  (~(get by escrows.state) tid)
+    ?~  esc
+      ~&  [%silk-escrow-poll %no-escrow tid]
+      `this
+    =/  st=(unit escrow-st)  (~(get by escrow-status.state) tid)
+    ::  only poll if released or refunded (tx was broadcast)
+    ?.  ?|  ?=([~ %released] st)
+            ?=([~ %refunded] st)
+        ==
+      ~&  [%silk-escrow-poll %not-broadcast tid st]
+      `this
+    =/  ms-addr=@t  multisig-address.u.esc
+    ?:  =('' ms-addr)
+      ~&  [%silk-escrow-poll %no-address tid]
+      `this
+    ~&  [%silk-escrow-poll %checking tid ms-addr]
+    =/  khan-card=card
+      [%pass /escrow-check/(scot %uv tid) %arvo %k %fard %zenith %get-balances-by-addr %noun !>(ms-addr)]
+    :-  [khan-card]~
+    this
+  ::
+      [%escrow-check @ ~]
+    ::  balance result for escrow confirmation
+    =/  tid=@uv  (slav %uv i.t.wire)
+    ?.  ?=([%khan %arow *] sign)  `this
+    =/  res=(each cage tang)  +>.sign
+    ?:  ?=(%| -.res)
+      ~&  [%silk-escrow-poll %balance-check-failed tid]
+      ::  retry in 10s
+      =/  retry-card=card
+        [%pass /escrow-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s10)]
+      :-  [retry-card]~
+      this
+    =/  bals  !<((list [denom=@t amount=@ud]) q.p.res)
+    ::  find $sZ balance
+    =/  bal=@ud
+      =/  bs  bals
+      |-
+      ?~  bs  0
+      ?:  =('$sZ' denom.i.bs)  amount.i.bs
+      $(bs t.bs)
+    ~&  [%silk-escrow-poll %balance tid bal]
+    ::  if balance is less than the tx fee, the tx went through
+    ?:  (lth bal 200.000)
+      ~&  [%silk-escrow %tx-confirmed tid %remaining-balance bal]
+      =.  escrow-status.state  (~(put by escrow-status.state) tid %confirmed)
+      :-  [(event-card [%escrow-confirmed tid])]~
+      this
+    ::  still has funds — keep polling (up to 2min = 12 polls)
+    =/  retry-card=card
+      [%pass /escrow-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s10)]
+    :-  [retry-card]~
     this
   ==
 ++  on-fail   on-fail:def
