@@ -10,6 +10,7 @@
   ==
 ::
 +$  contact-bundle  @ux
++$  contact-label  @uv
 ::
 +$  destination
   $%  [%endpoint =endpoint]
@@ -23,6 +24,7 @@
       weight=@ud
       default-delay=(unit @dr)
       expiry=(unit @da)
+      sig=@ux                    ::  Ed25519 signature by relay's own seed
   ==
 ::
 +$  route-hop
@@ -81,7 +83,7 @@
       [%drop-seed ship=@p]
       [%set-adaptive-hops on=?]
       [%build-reply-block ~]
-      [%mint-contact app=app-id]
+      [%mint-contact app=app-id label=@uv]
       [%trust-relay relay=relay-id]
       [%untrust-relay relay=relay-id]
   ==
@@ -132,7 +134,7 @@
       [%relay-trusted relay=relay-id]
       [%relay-untrusted relay=relay-id]
       [%relay-expired relay=relay-id]
-      [%contact-minted app=app-id]
+      [%contact-minted app=app-id label=@uv]
   ==
 ::
 +$  app-view

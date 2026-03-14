@@ -81,7 +81,7 @@
       [%escrow-sign-release thread-id=@uv sig=@ux signer-idx=@ud]
       [%escrow-sign-refund thread-id=@uv sig=@ux signer-idx=@ud]
       ::  moderator notifications
-      [%escrow-notify =escrow-config buyer=nym-id seller=nym-id]
+      [%escrow-notify =escrow-notify-data buyer=nym-id seller=nym-id]
       [%escrow-dispute thread-id=@uv =dispute]
       [%escrow-assembled thread-id=@uv result=escrow-st tx-hex=@t]
   ==
@@ -118,6 +118,22 @@
       sequence=@ud               ::  chain tx sequence (0 for first tx)
       buyer-wallet=@t            ::  buyer zenith address (for refund)
       seller-wallet=@t           ::  seller zenith address (for release)
+  ==
+::
+::  escrow-notify-data: stripped escrow info for moderator notification
+::  does NOT include individual wallet addresses (privacy)
+::
++$  escrow-notify-data
+  $:  =thread-id
+      buyer-pubkey=@ux
+      seller-pubkey=@ux
+      moderator-pubkey=@ux
+      =moderator-id
+      multisig-address=@t
+      amount=@ud
+      currency=@tas
+      timeout=@dr
+      moderator-fee-bps=@ud
   ==
 ::
 +$  escrow-st
