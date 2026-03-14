@@ -81,7 +81,7 @@
 +$  pending-msg
   $:  msg-hash=@ux
       thread-id=@uv
-      target=nym-route
+      target=@ux
       msg=silk-message
       sent-at=@da
       attempts=@ud
@@ -98,7 +98,7 @@
       verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
       next-seq=@ud
       keys=(map nym-id nym-keypair)
-      pending-acks=(map @ux pending-msg)  ::  msg-hash -> pending
+      pending-acks=*  ::  msg-hash -> pending (type changed)
   ==
 ::
 +$  state-6
@@ -112,7 +112,7 @@
       verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
       next-seq=@ud
       keys=(map nym-id nym-keypair)
-      pending-acks=(map @ux pending-msg)
+      pending-acks=*
       inventory=(map listing-id @ud)  ::  0 or absent = unlimited
   ==
 ::
@@ -127,7 +127,7 @@
       verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
       next-seq=@ud
       keys=(map nym-id nym-keypair)
-      pending-acks=(map @ux pending-msg)
+      pending-acks=*
       inventory=(map listing-id @ud)
       ::  moderator directory (gossiped)
       moderators=(map moderator-id moderator-profile)
@@ -143,7 +143,29 @@
       nyms=(map nym-id pseudonym)
       listings=(map listing-id listing)
       threads=(map thread-id silk-thread)
-      routes=(map nym-id nym-route)
+      routes=*
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
+      next-seq=@ud
+      keys=(map nym-id nym-keypair)
+      pending-acks=*
+      inventory=(map listing-id @ud)
+      moderators=(map moderator-id moderator-profile)
+      escrows=(map thread-id escrow-config)
+      escrow-status=(map thread-id escrow-st)
+      escrow-sigs=(map thread-id (map @ud @ux))
+      escrow-keys=(map thread-id @ux)
+      mod-keys=(map moderator-id @ux)     ::  moderator private keys
+      escrow-txhex=(map thread-id @t)     ::  assembled broadcast-ready tx hex
+  ==
+::
++$  state-9
+  $:  %9
+      nyms=(map nym-id pseudonym)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      contacts=(map nym-id @ux)
       peers=(set @p)
       attestations=(map attest-id attestation)
       verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
@@ -158,35 +180,91 @@
       escrow-keys=(map thread-id @ux)
       mod-keys=(map moderator-id @ux)     ::  moderator private keys
       escrow-txhex=(map thread-id @t)     ::  assembled broadcast-ready tx hex
+      our-contact=(unit @ux)              ::  cached contact-bundle for our ship
   ==
 ::
-+$  current-state  state-8
++$  state-10
+  $:  %10
+      nyms=(map nym-id pseudonym)
+      listings=(map listing-id listing)
+      threads=(map thread-id silk-thread)
+      contacts=(map nym-id @ux)
+      peers=(set @p)
+      attestations=(map attest-id attestation)
+      verifications=(map thread-id [verified=? balance=@ud checked-at=@da])
+      next-seq=@ud
+      keys=(map nym-id nym-keypair)
+      pending-acks=(map @ux pending-msg)
+      inventory=(map listing-id @ud)
+      moderators=(map moderator-id moderator-profile)
+      escrows=(map thread-id escrow-config)
+      escrow-status=(map thread-id escrow-st)
+      escrow-sigs=(map thread-id (map @ud @ux))
+      escrow-keys=(map thread-id @ux)
+      mod-keys=(map moderator-id @ux)
+      escrow-txhex=(map thread-id @t)
+      our-bundles=(map nym-id @ux)          ::  per-nym contact bundles
+      bundle-minted-at=@da                  ::  when bundles were last minted
+  ==
+::
++$  current-state  state-10
 +$  card  card:agent:gall
 ::
 ++  max-resend   3          ::  max resend attempts
 ++  resend-base  ~m1        ::  base backoff for resends
 ++  resend-period  ~m2      ::  how often to check pending acks
 ::
+++  seller-of-thread
+  |=  [tid=@uv threads=(map @uv silk-thread)]
+  ^-  nym-id
+  =/  thd=(unit silk-thread)  (~(get by threads) tid)
+  ?~  thd  *nym-id
+  seller.u.thd
+::
+++  buyer-of-thread
+  |=  [tid=@uv threads=(map @uv silk-thread)]
+  ^-  nym-id
+  =/  thd=(unit silk-thread)  (~(get by threads) tid)
+  ?~  thd  *nym-id
+  buyer.u.thd
+::
+++  default-nym
+  |=  nyms=(map nym-id pseudonym)
+  ^-  nym-id
+  =/  vals=(list pseudonym)  ~(val by nyms)
+  ?~  vals  *nym-id
+  id.i.vals
+::
 ++  skein-app  %silk-core
 ::
 ++  skein-send-card
-  |=  [our=ship target=nym-route msg=silk-message]
+  |=  [our=ship contact=@ux reply=(unit @ux) sender=nym-id keys=(map nym-id nym-keypair) msg=silk-message]
   ^-  card
+  =/  sig=@ux
+    =/  kp=(unit nym-keypair)  (~(get by keys) sender)
+    ?~  kp  0x0
+    (sign:ed:crypto (jam msg) sec.u.kp)
+  =/  pkt=silk-packet  [sender sig reply msg]
   =/  req
     :*  skein-app
-        [target-ship.target target-app.target]
-        (jam msg)
+        [%contact contact]
+        (jam pkt)
         [~ ~ ~]
     ==
   [%pass /silk/send %agent [our %skein] %poke %skein-send !>(req)]
 ::
 ++  gossip-card
-  |=  [our=ship target-ship=@p msg=silk-message]
+  |=  [our=ship target-ship=@p reply=(unit @ux) sender=nym-id keys=(map nym-id nym-keypair) msg=silk-message]
   ^-  card
+  =/  sig=@ux
+    =/  kp=(unit nym-keypair)  (~(get by keys) sender)
+    ?~  kp  0x0
+    (sign:ed:crypto (jam msg) sec.u.kp)
+  =/  pkt=silk-packet  [sender sig reply msg]
   =/  req
     :*  skein-app
-        [target-ship %silk-core]
-        (jam msg)
+        [%endpoint [target-ship %silk-core]]
+        (jam pkt)
         [~ ~ ~]
     ==
   [%pass /silk/gossip %agent [our %skein] %poke %skein-send !>(req)]
@@ -199,7 +277,7 @@
 ::  track a sent protocol message for ack-based resend
 ::
 ++  make-pending
-  |=  [tid=@uv target=nym-route msg=silk-message now=@da]
+  |=  [tid=@uv target=@ux msg=silk-message now=@da]
   ^-  [hash=@ux pm=pending-msg]
   =/  hash=@ux  `@ux`(sham msg)
   [hash [hash tid target msg now 0]]
@@ -301,12 +379,15 @@
   :_  this
   :~  [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
       [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
+      [%pass /silk/mint-contact %agent [our.bowl %skein] %poke %skein-admin !>([%mint-contact %silk-core])]
       [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
       ::  subscribe to market and zenith event feeds
       [%pass /market/events %agent [our.bowl %silk-market] %watch /market-events]
       [%pass /zenith/events %agent [our.bowl %silk-zenith] %watch /zenith-events]
       ::  resend timer for pending acks
       [%pass /silk/resend %arvo %b %wait (add now.bowl resend-period)]
+      ::  bundle rotation timer
+      [%pass /silk/rotate-bundles %arvo %b %wait (add now.bowl ~h12)]
   ==
 ::
 ++  on-save
@@ -328,17 +409,68 @@
     :~  [%pass /eyre/connect %arvo %e %connect [~ /apps/silk/api] %silk-core]
         [%pass /silk/bind %agent [our.bowl %skein] %poke %skein-admin !>([%bind skein-app])]
         [%pass /silk/channel %agent [our.bowl %skein] %poke %skein-admin !>([%join-channel %silk-market %silk-core])]
+        [%pass /silk/mint-contact %agent [our.bowl %skein] %poke %skein-admin !>([%mint-contact %silk-core])]
         ::  subscribe to market and zenith event feeds
         [%pass /market/events %agent [our.bowl %silk-market] %watch /market-events]
         [%pass /zenith/events %agent [our.bowl %silk-zenith] %watch /zenith-events]
         ::  resend timer for pending acks
         [%pass /silk/resend %arvo %b %wait (add now.bowl resend-period)]
+        ::  bundle rotation timer
+        [%pass /silk/rotate-bundles %arvo %b %wait (add now.bowl ~h12)]
     ==
-  ~&  [%silk-core %on-load %bootstrap-cards (lent leave-cards) %leave (lent load-cards) %load]
-  =/  load-cards  (weld leave-cards load-cards)
+  ::  start confirmation polls for released/refunded escrows
+  =/  escrow-poll-cards=(list card)
+    =/  esc-list  ~(tap by escrow-status.state)
+    |-
+    ?~  esc-list  ~
+    =/  [tid=@uv st=escrow-st]  i.esc-list
+    ?.  ?|  =(%released st)
+            =(%refunded st)
+        ==
+      $(esc-list t.esc-list)
+    ~&  [%silk-core %on-load %escrow-poll-start tid st]
+    :_  $(esc-list t.esc-list)
+    [%pass /escrow-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s3)]
+  ~&  [%silk-core %on-load %bootstrap-cards (lent leave-cards) %leave (lent load-cards) %load (lent escrow-poll-cards) %escrow-polls]
+  =/  load-cards  :(weld leave-cards load-cards escrow-poll-cards)
+  =/  try-10  (mule |.(;;(state-10 q.old)))
+  ?:  ?=(%& -.try-10)
+    =.  state  p.try-10
+    [load-cards this]
+  =/  try-9  (mule |.(;;(state-9 q.old)))
+  ?:  ?=(%& -.try-9)
+    =.  state
+      :*  %10
+          nyms.p.try-9  listings.p.try-9  threads.p.try-9
+          contacts.p.try-9  peers.p.try-9  attestations.p.try-9
+          verifications.p.try-9  next-seq.p.try-9
+          keys.p.try-9  pending-acks.p.try-9
+          inventory.p.try-9  moderators.p.try-9
+          escrows.p.try-9
+          escrow-status.p.try-9  escrow-sigs.p.try-9
+          escrow-keys.p.try-9
+          mod-keys.p.try-9  escrow-txhex.p.try-9
+          ~    ::  our-bundles (per-nym contacts, mint on load)
+          *@da ::  bundle-minted-at
+      ==
+    [load-cards this]
   =/  try-8  (mule |.(;;(state-8 q.old)))
   ?:  ?=(%& -.try-8)
-    =.  state  p.try-8
+    =.  state
+      :*  %10
+          nyms.p.try-8  listings.p.try-8  threads.p.try-8
+          ~   ::  contacts (clear routes)
+          peers.p.try-8  attestations.p.try-8
+          verifications.p.try-8  next-seq.p.try-8
+          keys.p.try-8  ~  ::  pending-acks (clear — target type changed)
+          inventory.p.try-8  moderators.p.try-8
+          escrows.p.try-8
+          escrow-status.p.try-8  escrow-sigs.p.try-8
+          escrow-keys.p.try-8
+          mod-keys.p.try-8  escrow-txhex.p.try-8
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
+      ==
     [load-cards this]
   =/  try-7  (mule |.(;;(state-7 q.old)))
   ?:  ?=(%& -.try-7)
@@ -354,101 +486,125 @@
           0  0  ''  ''  ::  account-number, sequence, buyer-wallet, seller-wallet
       ==
     =.  state
-      :*  %8
+      :*  %10
           nyms.p.try-7  listings.p.try-7  threads.p.try-7
-          routes.p.try-7  peers.p.try-7  attestations.p.try-7
+          ~  ::  contacts (clear routes)
+          peers.p.try-7  attestations.p.try-7
           verifications.p.try-7  next-seq.p.try-7
-          keys.p.try-7  pending-acks.p.try-7
+          keys.p.try-7  ~  ::  pending-acks (clear)
           inventory.p.try-7  moderators.p.try-7
           new-escrows
           escrow-status.p.try-7  escrow-sigs.p.try-7
           escrow-keys.p.try-7
           ~  ~  ::  mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-6  (mule |.(;;(state-6 q.old)))
   ?:  ?=(%& -.try-6)
     =.  state
-      :*  %8
+      :*  %10
           nyms.p.try-6  listings.p.try-6  threads.p.try-6
-          routes.p.try-6  peers.p.try-6  attestations.p.try-6
+          ~  ::  contacts
+          peers.p.try-6  attestations.p.try-6
           verifications.p.try-6  next-seq.p.try-6
-          keys.p.try-6  pending-acks.p.try-6
+          keys.p.try-6  ~  ::  pending-acks
           inventory.p.try-6
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-5  (mule |.(;;(state-5 q.old)))
   ?:  ?=(%& -.try-5)
     =.  state
-      :*  %8
+      :*  %10
           nyms.p.try-5  listings.p.try-5  threads.p.try-5
-          routes.p.try-5  peers.p.try-5  attestations.p.try-5
+          ~  ::  contacts
+          peers.p.try-5  attestations.p.try-5
           verifications.p.try-5  next-seq.p.try-5
-          keys.p.try-5  pending-acks.p.try-5
+          keys.p.try-5  ~  ::  pending-acks
           ~  ::  inventory
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-4  (mule |.(;;(state-4 q.old)))
   ?:  ?=(%& -.try-4)
     =.  state
-      :*  %8
+      :*  %10
           nyms.p.try-4  listings.p.try-4  threads.p.try-4
-          routes.p.try-4  peers.p.try-4  attestations.p.try-4
+          ~  ::  contacts
+          peers.p.try-4  attestations.p.try-4
           verifications.p.try-4  next-seq.p.try-4
           ~    ::  keys
           ~    ::  pending-acks
           ~    ::  inventory
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-3  (mule |.(;;(state-3 q.old)))
   ?:  ?=(%& -.try-3)
     =.  state
-      :*  %8
+      :*  %10
           (~(run by nyms.p.try-3) migrate-nym)
           listings.p.try-3  threads.p.try-3
-          routes.p.try-3  peers.p.try-3
+          ~  ::  contacts
+          peers.p.try-3
           attestations.p.try-3  ~  next-seq.p.try-3  ~  ~  ~
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-2  (mule |.(;;(state-2 q.old)))
   ?:  ?=(%& -.try-2)
     =.  state
-      :*  %8
+      :*  %10
           (~(run by nyms.p.try-2) migrate-nym)
           listings.p.try-2
           (~(run by threads.p.try-2) migrate-thread)
-          routes.p.try-2  peers.p.try-2
+          ~  ::  contacts
+          peers.p.try-2
           attestations.p.try-2  ~  next-seq.p.try-2  ~  ~  ~
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-1  (mule |.(;;(state-1 q.old)))
   ?:  ?=(%& -.try-1)
     =.  state
-      :*  %8
+      :*  %10
           (~(run by nyms.p.try-1) migrate-nym)
           listings.p.try-1
           (~(run by threads.p.try-1) migrate-thread)
-          routes.p.try-1  peers.p.try-1  ~  ~  next-seq.p.try-1  ~  ~  ~
+          ~  ::  contacts
+          peers.p.try-1  ~  ~  next-seq.p.try-1  ~  ~  ~
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
   =/  try-0  (mule |.(;;(state-0 q.old)))
   ?:  ?=(%& -.try-0)
     =.  state
-      :*  %8
+      :*  %10
           (~(run by nyms.p.try-0) migrate-nym)
           listings.p.try-0
           (~(run by threads.p.try-0) migrate-thread)
-          routes.p.try-0  ~  ~  ~  next-seq.p.try-0  ~  ~  ~
+          ~  ::  contacts
+          ~  ~  ~  next-seq.p.try-0  ~  ~  ~
           ~  ~  ~  ~  ~  ~  ~  ::  moderators, escrows, escrow-status, escrow-sigs, escrow-keys, mod-keys, escrow-txhex
+          ~    ::  our-bundles
+          *@da ::  bundle-minted-at
       ==
     [load-cards this]
-  =.  state  [%8 ~ ~ ~ ~ ~ ~ ~ 1 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~]
+  =.  state  [%10 ~ ~ ~ ~ ~ ~ ~ 1 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ *@da]
   [load-cards this]
 ::
 ++  on-poke
@@ -550,16 +706,19 @@
       =.  peers.state  (~(put in peers.state) ship)
       ~&  [%silk-channel %peer-saved ship %total ~(wyt in peers.state)]
       =/  our-listings=(list listing)  ~(val by listings.state)
-      =/  our-routes=(list nym-route)
-        %+  turn  ~(val by nyms.state)
-        |=(n=pseudonym [id.n our.bowl %silk-core])
+      =/  our-contacts=(list nym-contact)
+        %+  murn  ~(val by nyms.state)
+        |=  n=pseudonym
+        =/  bundle  (~(get by our-bundles.state) id.n)
+        ?~  bundle  ~
+        `[id.n u.bundle]
       =/  mod-cards=(list card)
         %+  turn  ~(val by moderators.state)
-        |=(mp=moderator-profile (gossip-card our.bowl ship [%moderator-profile mp]))
+        |=(mp=moderator-profile (gossip-card our.bowl ship (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%moderator-profile mp]))
       :_  this
       ;:  weld
         [(event-card [%peer-added ship])]~
-        [(gossip-card our.bowl ship [%catalog our-listings our-routes])]~
+        [(gossip-card our.bowl ship (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog our-listings our-contacts])]~
         mod-cards
       ==
     ?:  ?=([%channel-members @ *] raw)
@@ -578,17 +737,20 @@
       =/  peer-cards=(list card)
         (turn new-peers |=(p=@p (event-card [%peer-added p])))
       =/  our-listings=(list listing)  ~(val by listings.state)
-      =/  our-routes=(list nym-route)
-        %+  turn  ~(val by nyms.state)
-        |=(n=pseudonym [id.n our.bowl %silk-core])
+      =/  our-contacts=(list nym-contact)
+        %+  murn  ~(val by nyms.state)
+        |=  n=pseudonym
+        =/  bundle  (~(get by our-bundles.state) id.n)
+        ?~  bundle  ~
+        `[id.n u.bundle]
       =/  catalog-cards=(list card)
-        (turn new-peers |=(p=@p (gossip-card our.bowl p [%catalog our-listings our-routes])))
+        (turn new-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog our-listings our-contacts])))
       =/  mod-cards=(list card)
         %-  zing
         %+  turn  new-peers
         |=  p=@p
         %+  turn  ~(val by moderators.state)
-        |=(mp=moderator-profile (gossip-card our.bowl p [%moderator-profile mp]))
+        |=(mp=moderator-profile (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%moderator-profile mp]))
       [;:(weld peer-cards catalog-cards mod-cards) this]
     ?:  ?=([%channel-leave @ @] raw)
       =/  [* channel=@tas ship=@p]  raw
@@ -603,11 +765,37 @@
         (handle-command p.cmd-try)
       ~&  [%silk-core %noun-not-atom]
       `this
-    =/  parsed  (mule |.((silk-message (cue raw))))
-    ?:  ?=(%| -.parsed)
+    =/  cued  (cue raw)
+    ::  try silk-packet first (signed + reply material)
+    =/  pkt-try  (mule |.((silk-packet cued)))
+    =/  parsed=(unit [sender=(unit nym-id) reply=(unit @ux) msg=silk-message])
+      ?:  ?=(%& -.pkt-try)
+        =/  pkt  p.pkt-try
+        ::  verify signature if sender has known pubkey
+        =/  sender-key=(unit nym-keypair)
+          =/  nym-from-listing  (~(get by nyms.state) sender.pkt)
+          ?~  nym-from-listing  ~
+          `(~(gut by keys.state) sender.pkt [pubkey.u.nym-from-listing 0x0])
+        =/  sig-ok=?
+          ?~  sender-key  %.y  ::  no key to verify against, accept
+          ?:  =(0x0 sig.pkt)  %.y  ::  unsigned, accept
+          (veri:ed:crypto sig.pkt (jam body.pkt) pub.u.sender-key)
+        ?.  sig-ok
+          ~&  [%silk-core %sig-verify-failed sender.pkt]
+          ~
+        `[`sender.pkt reply.pkt body.pkt]
+      ::  fall back to raw silk-message (backward compat)
+      =/  msg-try  (mule |.((silk-message cued)))
+      ?:  ?=(%& -.msg-try)
+        `[~ ~ p.msg-try]
+      ~
+    ?~  parsed
       ~&  [%silk-core %noun-parse-fail]
       `this
-    =/  msg=silk-message  p.parsed
+    =/  msg=silk-message  msg.u.parsed
+    ::  update contact for sender nym from reply material
+    =?  contacts.state  ?&(?=(^ reply.u.parsed) ?=(^ sender.u.parsed))
+      (~(put by contacts.state) u.sender.u.parsed u.reply.u.parsed)
     ::  gossip messages
     ?:  ?=(%listing -.msg)
       ~&  [%silk-gossip %listing-received id.+.msg]
@@ -623,16 +811,19 @@
       =/  new-peer=?  !(~(has in peers.state) ship)
       =.  peers.state  (~(put in peers.state) ship)
       =/  our-listings=(list listing)  ~(val by listings.state)
-      =/  our-routes=(list nym-route)
-        %+  turn  ~(val by nyms.state)
-        |=(n=pseudonym [id.n our.bowl %silk-core])
+      =/  our-contacts=(list nym-contact)
+        %+  murn  ~(val by nyms.state)
+        |=  n=pseudonym
+        =/  bundle  (~(get by our-bundles.state) id.n)
+        ?~  bundle  ~
+        `[id.n u.bundle]
       ~&  [%silk-gossip %sending-catalog (lent our-listings) %listings-to ship]
       =/  mod-cards=(list card)
         %+  turn  ~(val by moderators.state)
-        |=(mp=moderator-profile (gossip-card our.bowl ship [%moderator-profile mp]))
+        |=(mp=moderator-profile (gossip-card our.bowl ship (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%moderator-profile mp]))
       :_  this
       ;:  weld
-        [(gossip-card our.bowl ship [%catalog our-listings our-routes])]~
+        [(gossip-card our.bowl ship (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog our-listings our-contacts])]~
         mod-cards
         ?:(new-peer [(event-card [%peer-added ship])]~ ~)
       ==
@@ -646,17 +837,31 @@
           $(lsts t.lsts)
         ~&  [%silk-gossip %new-listing id.i.lsts title.i.lsts]
         $(lsts t.lsts, listings.state (~(put by listings.state) id.i.lsts i.lsts))
-      =.  routes.state
-        =/  rtes=(list nym-route)  routes.msg
+      =.  contacts.state
+        =/  cts=(list nym-contact)  contacts.msg
         |-
-        ?~  rtes  routes.state
-        $(rtes t.rtes, routes.state (~(put by routes.state) nym-id.i.rtes i.rtes))
-      ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent routes.msg) %routes]
+        ?~  cts  contacts.state
+        $(cts t.cts, contacts.state (~(put by contacts.state) nym-id.i.cts contact.i.cts))
+      ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent contacts.msg) %contacts]
       :-  [(event-card [%catalog-received (lent listings.msg)])]~
       this
     ::  non-thread messages
     ?:  ?=(%attest -.msg)
       =/  att=attestation  +.msg
+      ::  verify signature if issuer's pubkey is known
+      =/  issuer-nym=(unit pseudonym)  (~(get by nyms.state) issuer.att)
+      =/  issuer-key=(unit nym-keypair)  (~(get by keys.state) issuer.att)
+      =/  sig-valid=?
+        ?~  issuer-key  %.y  ::  unknown issuer — accept (can't verify)
+        ?:  =(0x0 sig.att)
+          ~&  [%silk-attest %unsigned-rejected id.att issuer.att]
+          %.n
+        =/  att-msg=@  (jam [id.att subject.att issuer.att kind.att score.att note.att issued-at.att])
+        (veri:ed:crypto sig.att att-msg pub.u.issuer-key)
+      ?.  sig-valid
+        ~&  [%silk-attest %signature-invalid id.att issuer.att]
+        `this
+      ~&  ?~(issuer-key [%silk-attest %unverified-import id.att issuer.att] [%silk-attest %verified-import id.att issuer.att])
       =.  attestations.state  (~(put by attestations.state) id.att att)
       :_  this
       :~  [%pass /silk/rep %agent [our.bowl %silk-rep] %poke %noun !>([%import att])]
@@ -682,16 +887,16 @@
         =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
         ?~  thd  ~
         =/  notify=silk-message  [%escrow-notify esc buyer.u.thd seller.u.thd]
-        ::  send via direct route if we have it, AND gossip to all peers
-        =/  mod-route=(unit nym-route)  (~(get by routes.state) nym-id.mp)
+        ::  send via contact if we have it, AND gossip to all peers
+        =/  mod-contact=(unit @ux)  (~(get by contacts.state) nym-id.mp)
         =/  direct=(list card)
-          ?~  mod-route  ~
-          [(skein-send-card our.bowl u.mod-route notify)]~
+          ?~  mod-contact  ~
+          [(skein-send-card our.bowl u.mod-contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify)]~
         =/  gpeers=(list @p)
           %+  murn  ~(tap in peers.state)
           |=(p=@p ?:(=(p our.bowl) ~ `p))
         =/  gossip=(list card)
-          (turn gpeers |=(p=@p (gossip-card our.bowl p notify)))
+          (turn gpeers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify)))
         `(weld direct gossip)
       ~&  [%silk-moderator %profile-received id.mp %resend-escrows (lent resend-cards)]
       :-  (weld [(event-card [%moderator-registered mp])]~ resend-cards)
@@ -762,13 +967,13 @@
         ?~  thd-for-notify  ~
         =/  notify-msg=silk-message  [%escrow-notify updated buyer.u.thd-for-notify seller.u.thd-for-notify]
         =/  mod-for-notify=(unit moderator-profile)  (~(get by moderators.state) moderator-id.updated)
-        =/  mod-route-notify=(unit nym-route)  ?~(mod-for-notify ~ (~(get by routes.state) nym-id.u.mod-for-notify))
+        =/  mod-contact-notify=(unit @ux)  ?~(mod-for-notify ~ (~(get by contacts.state) nym-id.u.mod-for-notify))
         =/  direct=(list card)
-          ?~(mod-route-notify ~ [(skein-send-card our.bowl u.mod-route-notify notify-msg)]~)
+          ?~(mod-contact-notify ~ [(skein-send-card our.bowl u.mod-contact-notify (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify-msg)]~)
         =/  gpeers=(list @p)
           %+  murn  ~(tap in peers.state)
           |=(p=@p ?:(=(p our.bowl) ~ `p))
-        (weld direct (turn gpeers |=(p=@p (gossip-card our.bowl p notify-msg))))
+        (weld direct (turn gpeers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify-msg))))
       :-  :(weld [(event-card [%escrow-agreed tid multisig-address.updated])]~ market-cards notify-cards)
       this
     ?:  ?=(%escrow-funded -.msg)
@@ -791,10 +996,12 @@
         (~(has by nyms.state) seller.u.thd-for-role)
       =?  existing  ?&(we-are-seller ?=(^ our-priv) ?=(^ esc-for-sign) !=(0 account-number.u.esc-for-sign))
         =/  to-addr=@t  seller-wallet.u.esc-for-sign
+        =/  mod-fee=@ud  (div (mul amount.u.esc-for-sign moderator-fee-bps.u.esc-for-sign) 10.000)
+        =/  send-amt=@ud  (sub amount.u.esc-for-sign mod-fee)
         =/  sign-doc=@t
           %:  amino-json-sign-doc-send:multisig
             multisig-address.u.esc-for-sign  to-addr
-            amount.u.esc-for-sign  '$sZ'
+            send-amt  '$sZ'
             200.000  200.000  'zenith-stage1'
             account-number.u.esc-for-sign  sequence.u.esc-for-sign
           ==
@@ -826,6 +1033,8 @@
         this
       ::  release sends to seller wallet (from escrow-config)
       =/  to-addr=@t  seller-wallet.u.esc
+      =/  mod-fee=@ud  (div (mul amount.u.esc moderator-fee-bps.u.esc) 10.000)
+      =/  send-amt=@ud  (sub amount.u.esc mod-fee)
       =/  sorted-pks=(list @ux)
         (sort-pubkeys:multisig ~[buyer-pubkey.u.esc seller-pubkey.u.esc moderator-pubkey.u.esc])
       =/  sig-pairs=(list [@ud @ux])
@@ -836,7 +1045,7 @@
       =/  tx-hex=@t
         %:  assemble-multisig-tx:multisig
           multisig-address.u.esc  to-addr
-          amount.u.esc  '$sZ'
+          send-amt  '$sZ'
           200.000  200.000  'zenith-stage1'
           account-number.u.esc  sequence.u.esc
           sorted-pks  signer-indices  signatures
@@ -852,7 +1061,7 @@
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       =/  notify-cards=(list card)
-        (turn notify-peers |=(p=@p (gossip-card our.bowl p [%escrow-assembled tid %released tx-hex])))
+        (turn notify-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-assembled tid %released tx-hex])))
       :-  ;:(weld [(event-card [%escrow-released tid])]~ [broadcast-card]~ notify-cards)
       this
     ?:  ?=(%escrow-sign-refund -.msg)
@@ -932,7 +1141,7 @@
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       =/  notify-cards=(list card)
-        (turn notify-peers |=(p=@p (gossip-card our.bowl p [%escrow-assembled tid %refunded tx-hex])))
+        (turn notify-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-assembled tid %refunded tx-hex])))
       :-  ;:(weld [(event-card [%escrow-refunded tid])]~ [broadcast-card]~ notify-cards)
       this
     ::  escrow-assembled: update local state when counterparty assembled tx
@@ -982,10 +1191,10 @@
       ?.  !=(chain.msg chain.u.our-thd)  `this
       ::  chain mismatch — send our thread state
       =/  sender-nym=nym-id  buyer.u.our-thd
-      =/  route=(unit nym-route)  (~(get by routes.state) sender-nym)
-      ?~  route  `this
+      =/  contact=(unit @ux)  (~(get by contacts.state) sender-nym)
+      ?~  contact  `this
       :_  this
-      [(skein-send-card our.bowl u.route [%sync-thread-response u.our-thd])]~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%sync-thread-response u.our-thd])]~
     ::  thread sync response: merge if their chain is longer
     ?:  ?=(%sync-thread-response -.msg)
       =/  remote-thd=silk-thread  +.msg
@@ -1026,10 +1235,10 @@
           [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] init-chain now.bowl now.bowl]
         =.  threads.state  (~(put by threads.state) tid new-thd)
         ::  send ack back to buyer
-        =/  route=(unit nym-route)  (~(get by routes.state) buyer.o)
+        =/  contact=(unit @ux)  (~(get by contacts.state) buyer.o)
         =/  ack-cards=(list card)
-          ?~  route  ~
-          [(skein-send-card our.bowl u.route [%ack tid `@ux`(sham msg) now.bowl])]~
+          ?~  contact  ~
+          [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%ack tid `@ux`(sham msg) now.bowl])]~
         =/  ev-cards=(list card)
           :~  (event-card [%thread-opened new-thd])
               (event-card [%message-received tid msg])
@@ -1121,10 +1330,10 @@
       ?:  ?=(%dispute -.msg)
         plaintiff.+.msg
       seller.u.thd
-    =/  route=(unit nym-route)  (~(get by routes.state) sender-nym)
+    =/  contact=(unit @ux)  (~(get by contacts.state) sender-nym)
     =/  ack-cards=(list card)
-      ?~  route  ~
-      [(skein-send-card our.bowl u.route [%ack tid `@ux`(sham msg) now.bowl])]~
+      ?~  contact  ~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%ack tid `@ux`(sham msg) now.bowl])]~
     :-  ;:(weld [(event-card [%message-received tid msg])]~ ack-cards -.auto-release -.auto-refund)
     this
   ==
@@ -1183,14 +1392,7 @@
       ==
     ::
         [%orders ~]
-      =/  order-threads=(list silk-thread)
-        %+  murn  ~(val by threads.state)
-        |=  t=silk-thread
-        ?.  ?|  ?=(?(%accepted %paid %fulfilled %completed %disputed %resolved) thread-status.t)
-                (~(has by escrows.state) id.t)
-            ==
-          ~
-        `t
+      =/  order-threads=(list silk-thread)  ~(val by threads.state)
       %-  give-json  :-  eyre-id
       %-  pairs:enjs:format
       :~  :-  'orders'
@@ -1222,6 +1424,8 @@
           ::  compute effective status accounting for escrow state
           =/  esc-st=(unit escrow-st)  (~(get by escrow-status.state) id.t)
           =/  effective-status=@t
+            ?:  ?=(%open thread-status.t)
+              'offered'
             ?:  ?&(?=(^ esc-st) ?=(%proposed u.esc-st) ?=(%accepted thread-status.t))
               'escrow-proposed'
             ?:  ?&(?=(^ esc-st) ?=(%agreed u.esc-st) ?=(%accepted thread-status.t) has.invoice-info)
@@ -1445,12 +1649,13 @@
       :~  ['nyms' (numb:enjs:format ~(wyt by nyms.state))]
           ['listings' (numb:enjs:format ~(wyt by listings.state))]
           ['threads' (numb:enjs:format ~(wyt by threads.state))]
-          ['routes' (numb:enjs:format ~(wyt by routes.state))]
+          ['contacts' (numb:enjs:format ~(wyt by contacts.state))]
           ['peers' (numb:enjs:format ~(wyt in peers.state))]
           ['pendingAcks' (numb:enjs:format ~(wyt by pending-acks.state))]
           ['keys' (numb:enjs:format ~(wyt by keys.state))]
           ['moderators' (numb:enjs:format ~(wyt by moderators.state))]
           ['escrows' (numb:enjs:format ~(wyt by escrows.state))]
+          ['bundles' (numb:enjs:format ~(wyt by our-bundles.state))]
           ['ship' s+(scot %p our.bowl)]
       ==
     ==
@@ -1749,12 +1954,12 @@
     =.  threads.state  (~(put by threads.state) tid updated)
     ::  send completion to counterparty over skein
     =/  counter=nym-id  seller.u.thd
-    =/  route=(unit nym-route)  (~(get by routes.state) counter)
+    =/  contact=(unit @ux)  (~(get by contacts.state) counter)
     =/  send-cards=(list card)
-      ?~  route
-        ~&  [%silk-warn %no-route-for-complete counter]
+      ?~  contact
+        ~&  [%silk-warn %no-contact-for-complete counter]
         ~
-      [(skein-send-card our.bowl u.route complete-msg)]~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state complete-msg)]~
     =/  mkt-cards=(list card)
       [(market-advance-card our.bowl tid %completed)]~
     ::  auto-sign release if escrow is active
@@ -1804,10 +2009,10 @@
       =/  msg=@  (jam [id.unsigned subject.unsigned issuer.unsigned kind.unsigned score.unsigned note.unsigned issued-at.unsigned])
       unsigned(sig (sign:ed:crypto msg sec.u.kp))
     =.  attestations.state  (~(put by attestations.state) id.att att)
-    =/  route=(unit nym-route)  (~(get by routes.state) subject)
+    =/  contact=(unit @ux)  (~(get by contacts.state) subject)
     =/  send-cards=(list card)
-      ?~  route  ~
-      [(skein-send-card our.bowl u.route [%attest att])]~
+      ?~  contact  ~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%attest att])]~
     =/  all-cards=(list card)
       :*  [%pass /silk/rep %agent [our.bowl %silk-rep] %poke %noun !>([%issue att])]
           (weld send-cards (ok-response eyre-id))
@@ -1834,15 +2039,20 @@
     =/  new-thd=silk-thread
       [tid lid sender seller.u.lst %open [dm ~] init-chain now.bowl now.bowl]
     =.  threads.state  (~(put by threads.state) tid new-thd)
-    =/  sender-route=nym-route  [sender our.bowl %silk-core]
-    =.  routes.state  (~(put by routes.state) sender sender-route)
-    =/  route=(unit nym-route)  (~(get by routes.state) seller.u.lst)
+    ::  store our contact for this sender nym
+    =/  sender-bundle  (~(get by our-bundles.state) sender)
+    =?  contacts.state  ?=(^ sender-bundle)
+      (~(put by contacts.state) sender u.sender-bundle)
+    =/  sender-contact=(unit @ux)  (~(get by contacts.state) sender)
+    =/  contact=(unit @ux)  (~(get by contacts.state) seller.u.lst)
     =/  send-cards=(list card)
-      ?~  route
-        ~&  [%silk-warn %no-route-for-dm seller.u.lst]
+      ?~  contact
+        ~&  [%silk-warn %no-contact-for-dm seller.u.lst]
         ~
-      :~  (skein-send-card our.bowl u.route dm)
-          (skein-send-card our.bowl u.route [%catalog ~ [sender-route]~])
+      :~  (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state dm)
+          ?~  sender-contact
+            (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ ~])
+          (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ [sender u.sender-contact]~])
       ==
     :_  this
     %+  weld  [(event-card [%thread-opened new-thd])]~
@@ -1873,10 +2083,10 @@
       ?:  =(sender buyer.u.thd)
         seller.u.thd
       buyer.u.thd
-    =/  route=(unit nym-route)  (~(get by routes.state) counter)
+    =/  contact=(unit @ux)  (~(get by contacts.state) counter)
     =/  send-cards=(list card)
-      ?~  route  ~
-      [(skein-send-card our.bowl u.route dm)]~
+      ?~  contact  ~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state dm)]~
     :_  this
     %+  weld  [(event-card [%message-received tid dm])]~
     %+  weld  send-cards
@@ -1926,6 +2136,30 @@
     =/  thd=(unit silk-thread)  (~(get by threads.state) tid)
     ?~  thd
       :_(this (err-response eyre-id 'thread not found'))
+    ::  for escrow transactions: check escrow status instead of balance
+    =/  esc-st=(unit escrow-st)  (~(get by escrow-status.state) tid)
+    ?:  ?&  ?=(^ esc-st)
+            ?|  =(%released u.esc-st)
+                =(%refunded u.esc-st)
+                =(%confirmed u.esc-st)
+            ==
+        ==
+      =/  confirmed=?  =(%confirmed u.esc-st)
+      ::  if not confirmed yet, start a poll
+      =/  poll-cards=(list card)
+        ?:  confirmed  ~
+        :~  [%pass /escrow-poll/(scot %uv tid) %arvo %b %wait (add now.bowl ~s3)]
+        ==
+      =/  resp=json
+        %-  pairs:enjs:format
+        :~  ['thread_id' s+(scot %uv tid)]
+            ['status' s+`@t`thread-status.u.thd]
+            ['escrow_status' s+`@t`u.esc-st]
+            ['verified' b+confirmed]
+            ['escrow' b+%.y]
+        ==
+      :_  this
+      (weld poll-cards (give-json eyre-id resp))
     ::  get pay address from the invoice in this thread
     =/  inv=(unit invoice)  (find-invoice messages.u.thd)
     ?~  inv
@@ -2060,11 +2294,16 @@
     =/  to-addr=@t
       ?:  =('release' act)  seller-wallet.u.esc
       buyer-wallet.u.esc
+    ::  deduct moderator fee on release, full refund on refund
+    =/  mod-fee=@ud
+      ?:  =('release' act)  (div (mul amount.u.esc moderator-fee-bps.u.esc) 10.000)
+      0
+    =/  send-amt=@ud  (sub amount.u.esc mod-fee)
     ::  build amino JSON sign doc and sign
     =/  sign-doc=@t
       %:  amino-json-sign-doc-send:multisig
         multisig-address.u.esc  to-addr
-        amount.u.esc  '$sZ'
+        send-amt  '$sZ'
         200.000  200.000  'zenith-stage1'
         account-number.u.esc  sequence.u.esc
       ==
@@ -2096,7 +2335,7 @@
     ~&  [%silk-escrow %moderator-sign-broadcast %to (lent broadcast-peers) %action act]
     =/  sig-cards=(list card)
       %+  turn  broadcast-peers
-      |=(p=@p (gossip-card our.bowl p esc-msg))
+      |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state esc-msg))
     :_  this
     (weld sig-cards (ok-response eyre-id))
   ::
@@ -2143,26 +2382,33 @@
       =/  nym=pseudonym  [id label.cmd pub wallet.cmd now.bowl]
       =.  nyms.state  (~(put by nyms.state) id nym)
       =.  keys.state  (~(put by keys.state) id [pub seed])
-      :-  [(event-card [%nym-created nym])]~
-      this
+      ::  trigger fresh mint so new nym gets a bundle
+      :_  this
+      :~  (event-card [%nym-created nym])
+          [%pass /silk/mint-contact %agent [our.bowl %skein] %poke %skein-admin !>([%mint-contact %silk-core])]
+      ==
     ::
         %drop-nym
       =.  nyms.state  (~(del by nyms.state) id.cmd)
       =.  keys.state  (~(del by keys.state) id.cmd)
-      =.  routes.state  (~(del by routes.state) id.cmd)
+      =.  contacts.state  (~(del by contacts.state) id.cmd)
+      =.  our-bundles.state  (~(del by our-bundles.state) id.cmd)
       :-  [(event-card [%nym-dropped id.cmd])]~
       this
     ::
         %post-listing
       =.  listings.state  (~(put by listings.state) id.listing.cmd listing.cmd)
-      ::  broadcast listing + seller route to all peers via skein
-      =/  route=nym-route  [seller.listing.cmd our.bowl %silk-core]
+      ::  broadcast listing + seller contact to all peers via skein
+      =/  seller-contact=(unit @ux)  (~(get by our-bundles.state) seller.listing.cmd)
       =/  active-peers=(list @p)
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       ~&  [%silk-gossip %broadcasting-listing id.listing.cmd %to-peers (lent active-peers)]
       =/  peer-cards=(list card)
-        (turn active-peers |=(p=@p (gossip-card our.bowl p [%catalog [listing.cmd]~ [route]~])))
+        ?~  seller-contact
+          (turn active-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog [listing.cmd]~ ~])))
+        =/  nc=nym-contact  [seller.listing.cmd u.seller-contact]
+        (turn active-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog [listing.cmd]~ [nc]~])))
       :-  (weld [(event-card [%listing-posted listing.cmd])]~ peer-cards)
       this
     ::
@@ -2174,7 +2420,7 @@
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       =/  peer-cards=(list card)
-        (turn active-peers |=(p=@p (gossip-card our.bowl p [%listing-retracted id.cmd])))
+        (turn active-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%listing-retracted id.cmd])))
       :-  (weld [(event-card [%listing-retracted id.cmd])]~ peer-cards)
       this
     ::
@@ -2182,14 +2428,17 @@
       ?:  =(ship.cmd our.bowl)  `this
       =.  peers.state  (~(put in peers.state) ship.cmd)
       =/  our-listings=(list listing)  ~(val by listings.state)
-      =/  our-routes=(list nym-route)
-        %+  turn  ~(val by nyms.state)
-        |=(n=pseudonym [id.n our.bowl %silk-core])
+      =/  our-contacts=(list nym-contact)
+        %+  murn  ~(val by nyms.state)
+        |=  n=pseudonym
+        =/  bundle  (~(get by our-bundles.state) id.n)
+        ?~  bundle  ~
+        `[id.n u.bundle]
       ~&  [%silk-gossip %add-peer ship.cmd %sending (lent our-listings) %listings]
       :_  this
       :~  (event-card [%peer-added ship.cmd])
-          (gossip-card our.bowl ship.cmd [%catalog our-listings our-routes])
-          (gossip-card our.bowl ship.cmd [%catalog-request our.bowl])
+          (gossip-card our.bowl ship.cmd (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog our-listings our-contacts])
+          (gossip-card our.bowl ship.cmd (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog-request our.bowl])
       ==
     ::
         %drop-peer
@@ -2201,7 +2450,7 @@
       ~&  [%silk-sync %peer-count ~(wyt in peers.state) %peers ~(tap in peers.state)]
       :_  this
       %+  turn  ~(tap in peers.state)
-      |=(p=@p (gossip-card our.bowl p [%catalog-request our.bowl]))
+      |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog-request our.bowl]))
     ::
         %send-offer
       =/  o=offer  offer.cmd
@@ -2215,21 +2464,25 @@
         =/  nc=@ux  (advance-chain `@ux`0 %offer)
         [tid listing-id.o buyer.o seller.o %open [[%offer o] ~] nc now.bowl now.bowl]
       =.  threads.state  (~(put by threads.state) tid thd)
-      ::  ensure buyer route is stored and sent to seller
-      =/  buyer-route=nym-route  [buyer.o our.bowl %silk-core]
-      =.  routes.state  (~(put by routes.state) buyer.o buyer-route)
-      =/  route=(unit nym-route)  (~(get by routes.state) seller.o)
-      ~&  [%silk-send-offer %route-found ?=(^ route) %known-routes ~(wyt by routes.state)]
+      ::  ensure buyer contact is stored and sent to seller
+      =/  buyer-bundle  (~(get by our-bundles.state) buyer.o)
+      =?  contacts.state  ?=(^ buyer-bundle)
+        (~(put by contacts.state) buyer.o u.buyer-bundle)
+      =/  buyer-contact=(unit @ux)  (~(get by contacts.state) buyer.o)
+      =/  contact=(unit @ux)  (~(get by contacts.state) seller.o)
+      ~&  [%silk-send-offer %contact-found ?=(^ contact) %known-contacts ~(wyt by contacts.state)]
       =/  send-cards=(list card)
-        ?~  route
-          ~&  [%silk-warn %no-route-for-seller seller.o %known ~(key by routes.state)]
+        ?~  contact
+          ~&  [%silk-warn %no-contact-for-seller seller.o %known ~(key by contacts.state)]
           ~
-        :~  (skein-send-card our.bowl u.route [%offer o])
-            (skein-send-card our.bowl u.route [%catalog ~ [buyer-route]~])
+        :~  (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%offer o])
+            ?~  buyer-contact
+              (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ ~])
+            (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ [buyer.o u.buyer-contact]~])
         ==
       ::  track for ack-based resend
-      =?  pending-acks.state  ?=(^ route)
-        =/  [hash=@ux pm=pending-msg]  (make-pending tid u.route [%offer o] now.bowl)
+      =?  pending-acks.state  ?=(^ contact)
+        =/  [hash=@ux pm=pending-msg]  (make-pending tid u.contact [%offer o] now.bowl)
         (~(put by pending-acks.state) hash pm)
       ::  notify silk-market: create order
       =/  mkt-cards=(list card)
@@ -2250,17 +2503,21 @@
       =/  updated=silk-thread
         u.thd(thread-status %accepted, messages [[%accept acc] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.cmd updated)
-      ::  send seller route alongside accept so buyer can reply
-      =/  seller-route=nym-route  [seller.u.thd our.bowl %silk-core]
-      =.  routes.state  (~(put by routes.state) seller.u.thd seller-route)
-      =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      ::  send seller contact alongside accept so buyer can reply
+      =/  seller-bundle  (~(get by our-bundles.state) seller.u.thd)
+      =?  contacts.state  ?=(^ seller-bundle)
+        (~(put by contacts.state) seller.u.thd u.seller-bundle)
+      =/  seller-contact=(unit @ux)  (~(get by contacts.state) seller.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        :~  (skein-send-card our.bowl u.route [%accept acc])
-            (skein-send-card our.bowl u.route [%catalog ~ [seller-route]~])
+        ?~  contact  ~
+        :~  (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%accept acc])
+            ?~  seller-contact
+              (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ ~])
+            (skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ [seller.u.thd u.seller-contact]~])
         ==
-      =?  pending-acks.state  ?=(^ route)
-        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.cmd u.route [%accept acc] now.bowl)
+      =?  pending-acks.state  ?=(^ contact)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.cmd u.contact [%accept acc] now.bowl)
         (~(put by pending-acks.state) hash pm)
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %accepted)]~
@@ -2275,10 +2532,10 @@
       =/  updated=silk-thread
         u.thd(thread-status %cancelled, messages [[%reject rej] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.cmd updated)
-      =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%reject rej])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%reject rej])]~
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %cancelled)]~
       ::  auto-refund escrow on rejection
@@ -2313,10 +2570,10 @@
       =/  counterparty=nym-id
         ?:  (~(has by nyms.state) seller.u.thd)  buyer.u.thd
         seller.u.thd
-      =/  route=(unit nym-route)  (~(get by routes.state) counterparty)
+      =/  contact=(unit @ux)  (~(get by contacts.state) counterparty)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%reject rej])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%reject rej])]~
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %cancelled)]~
       ::  auto-refund escrow on cancel
@@ -2348,10 +2605,10 @@
         u.thd(messages [[%invoice inv] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.inv updated)
       ::  send invoice to buyer with per-tx payment address
-      =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%invoice inv])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%invoice inv])]~
       ::  notify market
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.inv %invoiced)]~
@@ -2366,12 +2623,12 @@
       =/  updated=silk-thread
         u.thd(thread-status %paid, messages [[%payment-proof pp] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.pp updated)
-      =/  route=(unit nym-route)  (~(get by routes.state) seller.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) seller.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%payment-proof pp])]~
-      =?  pending-acks.state  ?=(^ route)
-        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.pp u.route [%payment-proof pp] now.bowl)
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%payment-proof pp])]~
+      =?  pending-acks.state  ?=(^ contact)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.pp u.contact [%payment-proof pp] now.bowl)
         (~(put by pending-acks.state) hash pm)
       ::  notify market
       =/  mkt-cards=(list card)
@@ -2406,12 +2663,12 @@
       =/  updated=silk-thread
         u.thd(thread-status %fulfilled, messages [[%fulfill ful] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.ful updated)
-      =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%fulfill ful])]~
-      =?  pending-acks.state  ?=(^ route)
-        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.ful u.route [%fulfill ful] now.bowl)
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%fulfill ful])]~
+      =?  pending-acks.state  ?=(^ contact)
+        =/  [hash=@ux pm=pending-msg]  (make-pending thread-id.ful u.contact [%fulfill ful] now.bowl)
         (~(put by pending-acks.state) hash pm)
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.ful %fulfilled)]~
@@ -2430,25 +2687,25 @@
         ?:  =(plaintiff.dis buyer.u.thd)
           seller.u.thd
         buyer.u.thd
-      =/  route=(unit nym-route)  (~(get by routes.state) counter)
+      =/  contact=(unit @ux)  (~(get by contacts.state) counter)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%dispute dis])]~
-      ::  send dispute directly to moderator via nym route
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%dispute dis])]~
+      ::  send dispute directly to moderator via contact
       =/  esc-for-dis=(unit escrow-config)  (~(get by escrows.state) thread-id.dis)
       =/  mod-cards=(list card)
         ?~  esc-for-dis  ~
         =/  dispute-msg=silk-message  [%escrow-dispute thread-id.dis dis]
         =/  mod=(unit moderator-profile)  (~(get by moderators.state) moderator-id.u.esc-for-dis)
-        =/  mod-route=(unit nym-route)
-          ?~(mod ~ (~(get by routes.state) nym-id.u.mod))
+        =/  mod-contact=(unit @ux)
+          ?~(mod ~ (~(get by contacts.state) nym-id.u.mod))
         =/  direct=(list card)
-          ?~(mod-route ~ [(skein-send-card our.bowl u.mod-route dispute-msg)]~)
+          ?~(mod-contact ~ [(skein-send-card our.bowl u.mod-contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state dispute-msg)]~)
         =/  dpeers=(list @p)
           %+  murn  ~(tap in peers.state)
           |=(p=@p ?:(=(p our.bowl) ~ `p))
-        ~&  [%silk-escrow %dispute-to-moderator %direct ?=(^ mod-route) %gossip-to (lent dpeers)]
-        (weld direct (turn dpeers |=(p=@p (gossip-card our.bowl p dispute-msg))))
+        ~&  [%silk-escrow %dispute-to-moderator %direct ?=(^ mod-contact) %gossip-to (lent dpeers)]
+        (weld direct (turn dpeers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state dispute-msg))))
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.dis %disputed)]~
       :-  ;:(weld [(event-card [%thread-updated thread-id.dis %disputed])]~ send-cards mod-cards mkt-cards)
@@ -2463,24 +2720,48 @@
         u.thd(thread-status %resolved, messages [[%verdict ver] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.ver updated)
       =/  mkt-cards=(list card)
-        [(market-advance-card our.bowl thread-id.ver %resolved)]~
-      :-  (weld [(event-card [%thread-updated thread-id.ver %resolved])]~ mkt-cards)
+        :~  (market-advance-card our.bowl thread-id.ver %resolved)
+            [%pass /market/resolve %agent [our.bowl %silk-market] %poke %noun !>([%resolve-dispute thread-id.ver ruling.ver])]
+        ==
+      ::  auto-trigger escrow action based on ruling
+      =/  has-escrow=?  (~(has by escrows.state) thread-id.ver)
+      =/  escrow-result=(quip card _this)
+        ?.  has-escrow
+          `this
+        ?+  ruling.ver  `this
+            %seller-wins
+          ~&  [%silk-verdict %auto-release thread-id.ver]
+          (handle-command [%release-escrow thread-id.ver])
+        ::
+            %buyer-wins
+          ~&  [%silk-verdict %auto-refund thread-id.ver]
+          (handle-command [%refund-escrow thread-id.ver])
+        ::
+            %split
+          ::  split collapses to release for now (documented gap)
+          ~&  [%silk-verdict %auto-release-split thread-id.ver]
+          (handle-command [%release-escrow thread-id.ver])
+        ==
+      =.  this  +.escrow-result
+      :-  ;:(weld [(event-card [%thread-updated thread-id.ver %resolved])]~ mkt-cards -.escrow-result)
       this
     ::
         %register-moderator
       =/  mp=moderator-profile  moderator-profile.cmd
       =.  moderators.state  (~(put by moderators.state) id.mp mp)
-      ::  broadcast profile + route to all peers
+      ::  broadcast profile + contact to all peers
       =/  active-peers=(list @p)
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
-      =/  mod-route=nym-route  [nym-id.mp our.bowl %silk-core]
       =/  peer-cards=(list card)
         %-  zing
         %+  turn  active-peers
         |=  p=@p
-        :~  (gossip-card our.bowl p [%moderator-profile mp])
-            (gossip-card our.bowl p [%catalog ~ [mod-route]~])
+        =/  mod-bundle  (~(get by our-bundles.state) nym-id.mp)
+        :~  (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%moderator-profile mp])
+            ?~  mod-bundle
+              (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ ~])
+            (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%catalog ~ [nym-id.mp u.mod-bundle]~])
         ==
       ~&  [%silk-moderator %registered-and-broadcast id.mp %nym nym-id.mp %to (lent active-peers) %peers]
       :-  (weld [(event-card [%moderator-registered mp])]~ peer-cards)
@@ -2493,7 +2774,7 @@
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       =/  peer-cards=(list card)
-        (turn active-peers |=(p=@p (gossip-card our.bowl p [%moderator-retracted id.cmd])))
+        (turn active-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%moderator-retracted id.cmd])))
       :-  (weld [(event-card [%moderator-retracted id.cmd])]~ peer-cards)
       this
     ::
@@ -2541,10 +2822,10 @@
       =.  escrows.state  (~(put by escrows.state) thread-id.cmd esc)
       =.  escrow-status.state  (~(put by escrow-status.state) thread-id.cmd %proposed)
       ::  send proposal to seller over skein
-      =/  route=(unit nym-route)  (~(get by routes.state) seller.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) seller.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%escrow-propose thread-id.cmd pub id.u.mod timeout.cmd ?~(buyer-nym '' wallet.u.buyer-nym)])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-propose thread-id.cmd pub id.u.mod timeout.cmd ?~(buyer-nym '' wallet.u.buyer-nym)])]~
       =/  market-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %escrow-proposed)]~
       :-  :(weld [(event-card [%escrow-proposed thread-id.cmd esc])]~ send-cards market-cards)
@@ -2570,23 +2851,23 @@
       =.  escrows.state  (~(put by escrows.state) thread-id.cmd updated)
       =.  escrow-status.state  (~(put by escrow-status.state) thread-id.cmd %agreed)
       ::  send agreement to buyer
-      =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%escrow-agree thread-id.cmd pub ?~(seller-nym '' wallet.u.seller-nym)])]~
-      ::  notify moderator: try direct route + gossip to all peers as fallback
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-agree thread-id.cmd pub ?~(seller-nym '' wallet.u.seller-nym)])]~
+      ::  notify moderator: try direct contact + gossip to all peers as fallback
       =/  mod=(unit moderator-profile)  (~(get by moderators.state) moderator-id.updated)
-      =/  mod-route=(unit nym-route)  ?~(mod ~ (~(get by routes.state) nym-id.u.mod))
+      =/  mod-contact=(unit @ux)  ?~(mod ~ (~(get by contacts.state) nym-id.u.mod))
       =/  notify-msg=silk-message  [%escrow-notify updated buyer.u.thd seller.u.thd]
       =/  direct-cards=(list card)
-        ?~  mod-route  ~
-        [(skein-send-card our.bowl u.mod-route notify-msg)]~
+        ?~  mod-contact  ~
+        [(skein-send-card our.bowl u.mod-contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify-msg)]~
       =/  gossip-peers=(list @p)
         %+  murn  ~(tap in peers.state)
         |=(p=@p ?:(=(p our.bowl) ~ `p))
       =/  gossip-cards=(list card)
-        (turn gossip-peers |=(p=@p (gossip-card our.bowl p notify-msg)))
-      ~&  [%silk-escrow %notify-moderator %mod-id moderator-id.updated %direct ?=(^ mod-route) %gossip-to (lent gossip-peers)]
+        (turn gossip-peers |=(p=@p (gossip-card our.bowl p (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state notify-msg)))
+      ~&  [%silk-escrow %notify-moderator %mod-id moderator-id.updated %direct ?=(^ mod-contact) %gossip-to (lent gossip-peers)]
       =/  mod-cards=(list card)  (weld direct-cards gossip-cards)
       =/  market-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %escrow-agreed)]~
@@ -2611,10 +2892,10 @@
       =/  inv-thd=silk-thread
         u.thd(messages [[%invoice inv] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) thread-id.cmd inv-thd)
-      =/  buyer-route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+      =/  buyer-contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
       =/  inv-cards=(list card)
-        ?~  buyer-route  ~
-        [(skein-send-card our.bowl u.buyer-route [%invoice inv])]~
+        ?~  buyer-contact  ~
+        [(skein-send-card our.bowl u.buyer-contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%invoice inv])]~
       =/  inv-mkt=(list card)
         [(market-advance-card our.bowl thread-id.cmd %invoiced)]~
       :-  :(weld [(event-card [%escrow-agreed thread-id.cmd multisig-address.updated])]~ send-cards mod-cards market-cards inv-cards inv-mkt)
@@ -2628,10 +2909,10 @@
       =/  thd=(unit silk-thread)  (~(get by threads.state) thread-id.cmd)
       ?~  thd  `this
       =/  counter=nym-id  seller.u.thd
-      =/  route=(unit nym-route)  (~(get by routes.state) counter)
+      =/  contact=(unit @ux)  (~(get by contacts.state) counter)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%escrow-funded thread-id.cmd tx-hash.cmd])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-funded thread-id.cmd tx-hash.cmd])]~
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl thread-id.cmd %escrowed)]~
       ::  query multisig account number from chain
@@ -2682,10 +2963,12 @@
         $(pks t.pks, idx +(idx))
       ::  release sends to seller's wallet (stored in escrow-config)
       =/  to-addr=@t  seller-wallet.u.esc
+      =/  mod-fee=@ud  (div (mul amount.u.esc moderator-fee-bps.u.esc) 10.000)
+      =/  send-amt=@ud  (sub amount.u.esc mod-fee)
       =/  sign-doc=@t
         %:  amino-json-sign-doc-send:multisig
           multisig-address.u.esc  to-addr
-          amount.u.esc  '$sZ'
+          send-amt  '$sZ'
           200.000  200.000  'zenith-stage1'
           account-number.u.esc  sequence.u.esc
         ==
@@ -2699,11 +2982,11 @@
       ?~  thd  `this
       =/  we-are-seller=?  (~(has by nyms.state) seller.u.thd)
       =/  counter=nym-id  ?:(we-are-seller buyer.u.thd seller.u.thd)
-      =/  route=(unit nym-route)  (~(get by routes.state) counter)
-      ~&  [%silk-escrow %release-sign %idx our-idx %sigs ~(wyt by existing) %counter counter %has-route ?=(^ route)]
+      =/  contact=(unit @ux)  (~(get by contacts.state) counter)
+      ~&  [%silk-escrow %release-sign %idx our-idx %sigs ~(wyt by existing) %counter counter %has-contact ?=(^ contact)]
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%escrow-sign-release thread-id.cmd sig our-idx])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-sign-release thread-id.cmd sig our-idx])]~
       ::  check for local 2-sig assembly
       ?.  (gte ~(wyt by existing) 2)
         :-  (weld [(event-card [%escrow-releasing thread-id.cmd])]~ send-cards)
@@ -2718,7 +3001,7 @@
       =/  tx-hex=@t
         %:  assemble-multisig-tx:multisig
           multisig-address.u.esc  to-addr
-          amount.u.esc  '$sZ'
+          send-amt  '$sZ'
           200.000  200.000  'zenith-stage1'
           account-number.u.esc  sequence.u.esc
           sorted-pks  signer-indices  signatures
@@ -2777,11 +3060,11 @@
       ?~  thd  `this
       =/  we-are-buyer=?  (~(has by nyms.state) buyer.u.thd)
       =/  counter=nym-id  ?:(we-are-buyer seller.u.thd buyer.u.thd)
-      =/  route=(unit nym-route)  (~(get by routes.state) counter)
-      ~&  [%silk-escrow %refund-sign %idx our-idx %sigs ~(wyt by existing) %counter counter %has-route ?=(^ route)]
+      =/  contact=(unit @ux)  (~(get by contacts.state) counter)
+      ~&  [%silk-escrow %refund-sign %idx our-idx %sigs ~(wyt by existing) %counter counter %has-contact ?=(^ contact)]
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%escrow-sign-refund thread-id.cmd sig our-idx])]~
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%escrow-sign-refund thread-id.cmd sig our-idx])]~
       ::  check for local 2-sig assembly
       ?.  (gte ~(wyt by existing) 2)
         :-  (weld [(event-card [%escrow-refunding thread-id.cmd])]~ send-cards)
@@ -2821,6 +3104,7 @@
         ['pubkey' s+(scot %ux pubkey.n)]
         ['wallet' s+wallet.n]
         ['has_signing_key' b+(~(has by keys.state) id.n)]
+        ['has_bundle' b+(~(has by our-bundles.state) id.n)]
         ['created_at' (numb:enjs:format (div (sub created-at.n ~1970.1.1) ~s1))]
     ==
   ::
@@ -3017,7 +3301,7 @@
       :*  nyms=~(wyt by nyms.state)
           listings=~(wyt by listings.state)
           threads=~(wyt by threads.state)
-          routes=~(wyt by routes.state)
+          contacts=~(wyt by contacts.state)
           peers=~(wyt in peers.state)
       ==
     ``noun+!>(s)
@@ -3076,6 +3360,27 @@
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _this)
   ?+  wire  (on-agent:def wire sign)
+      [%silk %mint-contact ~]
+    ?.  ?=(%poke-ack -.sign)  `this
+    ?^  p.sign
+      ~&  [%silk-core %mint-contact-failed]
+      ((slog u.p.sign) `this)
+    ::  mint-contact succeeded — scry skein for our contact-bundle
+    ~&  [%silk-core %mint-contact-ok %scrying-contact]
+    =/  result
+      (mule |.(.^(* %gx /(scot %p our.bowl)/skein/(scot %da now.bowl)/contact/silk-core/noun)))
+    ?:  ?=(%| -.result)
+      ~&  [%silk-core %mint-contact-scry-failed]
+      `this
+    =/  bundle=@ux  ;;(@ux p.result)
+    ~&  [%silk-core %mint-contact-stored bundle %nyms ~(wyt by nyms.state)]
+    ::  store bundle for all current nyms
+    =.  our-bundles.state
+      %-  ~(gas by our-bundles.state)
+      (turn ~(tap in ~(key by nyms.state)) |=(n=nym-id [n bundle]))
+    =.  bundle-minted-at.state  now.bowl
+    `this
+  ::
       [%silk *]
     ?:  ?=(%poke-ack -.sign)
       ?~  p.sign  `this
@@ -3134,10 +3439,10 @@
     =/  updated=silk-thread
       u.thd(messages [[%invoice inv] messages.u.thd], chain nc, updated-at now.bowl)
     =.  threads.state  (~(put by threads.state) tid updated)
-    =/  route=(unit nym-route)  (~(get by routes.state) buyer.u.thd)
+    =/  contact=(unit @ux)  (~(get by contacts.state) buyer.u.thd)
     =/  send-cards=(list card)
-      ?~  route  ~
-      [(skein-send-card our.bowl u.route [%invoice inv])]~
+      ?~  contact  ~
+      [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%invoice inv])]~
     =/  mkt-cards=(list card)
       [(market-advance-card our.bowl tid %invoiced)]~
     :-  ;:(weld [(event-card [%thread-updated tid %accepted])]~ send-cards mkt-cards)
@@ -3208,6 +3513,13 @@
       [%eyre *]
     `this
   ::
+      [%silk %rotate-bundles ~]
+    ::  re-mint contact bundle and re-arm timer
+    :_  this
+    :~  [%pass /silk/mint-contact %agent [our.bowl %skein] %poke %skein-admin !>([%mint-contact %silk-core])]
+        [%pass /silk/rotate-bundles %arvo %b %wait (add now.bowl ~h12)]
+    ==
+  ::
       [%silk %resend ~]
     ::  process pending acks: resend or expire
     =/  now=@da  now.bowl
@@ -3234,7 +3546,7 @@
     =/  resend-cards=(list card)
       %+  turn  to-resend
       |=  [hash=@ux pm=pending-msg]
-      (skein-send-card our.bowl target.pm msg.pm)
+      (skein-send-card our.bowl target.pm (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state msg.pm)
     =.  pending-acks.state
       %-  ~(gas by pending-acks.state)
       %+  turn  to-resend
@@ -3313,12 +3625,12 @@
       =/  updated=silk-thread
         u.thd(thread-status %paid, messages [[%payment-proof pp] messages.u.thd], chain nc, updated-at now.bowl)
       =.  threads.state  (~(put by threads.state) tid updated)
-      =/  route=(unit nym-route)  (~(get by routes.state) seller.u.thd)
+      =/  contact=(unit @ux)  (~(get by contacts.state) seller.u.thd)
       =/  send-cards=(list card)
-        ?~  route  ~
-        [(skein-send-card our.bowl u.route [%payment-proof pp])]~
-      =?  pending-acks.state  ?=(^ route)
-        =/  [hash=@ux pm=pending-msg]  (make-pending tid u.route [%payment-proof pp] now.bowl)
+        ?~  contact  ~
+        [(skein-send-card our.bowl u.contact (~(get by our-bundles.state) (default-nym nyms.state)) (default-nym nyms.state) keys.state [%payment-proof pp])]~
+      =?  pending-acks.state  ?=(^ contact)
+        =/  [hash=@ux pm=pending-msg]  (make-pending tid u.contact [%payment-proof pp] now.bowl)
         (~(put by pending-acks.state) hash pm)
       =/  mkt-cards=(list card)
         [(market-advance-card our.bowl tid %paid)]~

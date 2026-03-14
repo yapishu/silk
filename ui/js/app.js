@@ -23,8 +23,8 @@ const App = {
     zenithAccounts: [],
     loading: true,
     dialog: null,
-    threadsPage: 0,
     ordersPage: 0,
+    collapsedOrders: JSON.parse(localStorage.getItem('silk-collapsed-orders') || '{}'),
     apiErrors: [],
   },
 
@@ -192,7 +192,6 @@ const App = {
       { id: 'dashboard',   icon: '\u25A3', label: 'Dashboard' },
       { id: 'identities',  icon: '\u2662', label: 'Identities' },
       { id: 'marketplace', icon: '\u25C8', label: 'Marketplace' },
-      { id: 'threads',     icon: '\u2261', label: 'Threads' },
       { id: 'orders',      icon: '\u25CE', label: 'Orders' },
       { id: 'reputation',  icon: '\u2605', label: 'Reputation' },
       { id: 'moderators', icon: '\u2696', label: 'Moderators' },
@@ -228,7 +227,7 @@ const App = {
       case 'dashboard':   return this.renderDashboard();
       case 'identities':  return this.renderIdentities();
       case 'marketplace': return this.renderMarketplace();
-      case 'threads':     return this.renderThreads();
+      case 'threads':     return this.renderOrders();
       case 'orders':      return this.renderOrders();
       case 'reputation':  return this.renderReputation();
       case 'moderators': return this.renderModerators();
@@ -283,6 +282,23 @@ const App = {
           <div class="stat-card">
             <div class="stat-label">Trusted</div>
             <div class="stat-value">${sk.trustedRelays || 0}</div>
+          </div>
+        </div>
+
+        <div class="privacy-panel">
+          <div class="privacy-header">
+            <span class="privacy-icon">\u26E8</span>
+            <span class="privacy-title">Transport Privacy</span>
+          </div>
+          <div class="privacy-checks">
+            ${this.privacyCheck('Asymmetric Headers', true, 'Per-hop DH encryption — relays cannot read downstream layers')}
+            ${this.privacyCheck('Body Onion Routing', true, 'Per-hop body re-encryption — different ciphertext at each relay')}
+            ${this.privacyCheck('Cell ID Randomization', true, 'Per-hop cell ID reassignment — no cross-hop correlation')}
+            ${this.privacyCheck('Opaque Contacts', (s.contacts || 0) > 0, `${s.contacts || 0} nym contacts via contact-bundles — no ship in silk state`)}
+            ${this.privacyCheck('Signed Packets', (s.nyms || 0) > 0, 'Ed25519 silk-packet signatures — sender continuity without transport identity')}
+            ${this.privacyCheck('Per-Nym Bundles', (s.nyms || 0) > 0, 'Separate contact bundle per pseudonym — cross-nym correlation resistant')}
+            ${this.privacyCheck('Reply Material', true, 'Every message carries fresh reply contact-bundle')}
+            ${this.privacyCheck('Multi-Hop Routes', (sk.effectiveMinHops || 0) >= 1, `${sk.effectiveMinHops || 0} effective min hops — ${(sk.effectiveMinHops || 0) >= 2 ? 'strong' : (sk.effectiveMinHops || 0) >= 1 ? 'moderate' : 'weak'} route diversity`)}
           </div>
         </div>
 
@@ -343,8 +359,8 @@ const App = {
                 <span>${sk.pendingRetries || 0}</span>
               </div>
               <div class="mini-stat-row">
-                <span class="mini-label">Reply Tokens</span>
-                <span>${sk.replyTokens || 0}</span>
+                <span class="mini-label">Contacts</span>
+                <span>${s.contacts || 0}</span>
               </div>
               <div class="mini-stat-row">
                 <span class="mini-label">Channels</span>
@@ -390,6 +406,9 @@ const App = {
                 <div class="nym-key">
                   key: ${this.shortId(n.pubkey)}
                   ${n.has_signing_key ? '<span class="badge badge-accepted" style="font-size:9px; margin-left:6px;">ed25519</span>' : ''}
+                </div>
+                <div class="nym-bundle">
+                  ${n.has_bundle ? '<span class="priv-dot priv-on" style="font-size:10px;">\u2713</span> contact bundle active' : '<span class="priv-dot priv-off" style="font-size:10px;">\u2717</span> no contact bundle'}
                 </div>
                 <div class="nym-wallet">${n.wallet ? `wallet: ${n.wallet}` : 'no wallet set'}</div>
                 <div class="nym-date">created ${this.fmtDate(n.created_at)}</div>
@@ -602,14 +621,37 @@ const App = {
 
   // ---- orders ----
 
+  isOrderCollapsed(o) {
+    const id = o.thread_id || o.id;
+    if (id in this.state.collapsedOrders) return this.state.collapsedOrders[id];
+    // auto-collapse completed, cancelled, resolved
+    return ['completed', 'cancelled', 'resolved'].includes(o.status);
+  },
+
+  toggleOrderCollapse(id) {
+    const orders = this.state.collapsedOrders;
+    if (id in orders) {
+      orders[id] = !orders[id];
+    } else {
+      // first explicit toggle — find current order to determine current default
+      const o = this.state.orders.find(o => (o.thread_id || o.id) === id);
+      const wasCollapsed = o && ['completed', 'cancelled', 'resolved'].includes(o.status);
+      orders[id] = !wasCollapsed;
+    }
+    localStorage.setItem('silk-collapsed-orders', JSON.stringify(orders));
+    this.render();
+  },
+
   orderStep(o) {
-    if (o.status === 'completed') return 5;
-    if (o.status === 'fulfilled') return 4;
-    if (o.status === 'escrowed') return 3;
-    if (o.status === 'paid') return 2;
-    if (o.status === 'accepted' && o.has_invoice) return 1;
-    if (o.status === 'escrow-agreed') return 1;
-    if (o.status === 'escrow-proposed') return 0;
+    if (o.status === 'completed') return 6;
+    if (o.status === 'fulfilled') return 5;
+    if (o.status === 'escrowed') return 4;
+    if (o.status === 'paid') return 3;
+    if (o.status === 'accepted' && o.has_invoice) return 2;
+    if (o.status === 'escrow-agreed') return 2;
+    if (o.status === 'escrow-proposed') return 1;
+    if (o.status === 'accepted') return 1;
+    if (o.status === 'offered') return 0;
     return 0;
   },
 
@@ -701,9 +743,9 @@ const App = {
   },
 
   renderOrders() {
-    const STEPS = ['accepted','invoiced','paid','escrowed','fulfilled','completed'];
+    const STEPS = ['offered','accepted','invoiced','paid','escrowed','fulfilled','completed'];
     const myNymIds = new Set(this.state.nyms.map(n => n.id));
-    const PAGE = 10;
+    const PAGE = 15;
     const page = this.state.ordersPage || 0;
     const all = [...this.state.orders].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     const paged = all.slice(page * PAGE, (page + 1) * PAGE);
@@ -711,11 +753,11 @@ const App = {
     return `
       <div class="page-header">
         <h2>Orders</h2>
-        <div class="page-desc">Track order lifecycle (${all.length})</div>
+        <div class="page-desc">All negotiations and transactions (${all.length})</div>
       </div>
       <div class="page-content">
         ${paged.length ? `
-          <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
             ${paged.map(o => {
               const isBuyer = myNymIds.has(o.buyer);
               const isSeller = myNymIds.has(o.seller);
@@ -724,16 +766,42 @@ const App = {
               const title = listing ? this.esc(listing.title) : this.shortId(o.listing_id);
               const stepIdx = this.orderStep(o);
               const { btn, wait } = this.orderAction(o, role);
+              const tid = o.thread_id || o.id;
+              const collapsed = this.isOrderCollapsed(o);
+              const msgCount = (o.messages || []).length;
+
+              if (collapsed) {
+                return `
+                  <div class="card order-collapsed" style="padding: 12px 20px; cursor: pointer;" data-action="toggle-collapse" data-tid="${tid}">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <div style="display: flex; align-items: center; gap: 12px;">
+                        <span style="color: var(--text-muted); font-size: 12px;">\u25B6</span>
+                        <span style="font-size: 14px; font-weight: 600; color: var(--text-bright);">${title}</span>
+                        <span style="font-size: 12px; color: var(--text-dim);">${o.amount ? this.fmtPrice(o.amount) : ''}</span>
+                        <span class="badge badge-${o.status.replace('escrow-','')}" style="font-size: 10px;">${o.status}</span>
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 12px;">
+                        <span style="font-size: 11px; color: var(--text-muted);">${role === 'buyer' ? 'buyer' : role === 'seller' ? 'seller' : ''}</span>
+                        <span style="font-size: 11px; color: var(--text-muted);">${this.fmtTime(o.updated_at)}</span>
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }
 
               return `
                 <div class="card">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <div>
-                      <div style="font-size: 15px; font-weight: 600; color: var(--text-bright);">
-                        ${title} &mdash; ${this.fmtPrice(o.amount)}
-                      </div>
-                      <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
-                        ${role === 'buyer' ? 'You are the buyer' : role === 'seller' ? 'You are the seller' : this.shortId(o.thread_id)}
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <span style="color: var(--text-muted); font-size: 12px; cursor: pointer;" data-action="toggle-collapse" data-tid="${tid}">\u25BC</span>
+                      <div>
+                        <div style="font-size: 15px; font-weight: 600; color: var(--text-bright);">
+                          ${title} &mdash; ${o.amount ? this.fmtPrice(o.amount) : 'conversation'}
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                          ${role === 'buyer' ? 'You are the buyer' : role === 'seller' ? 'You are the seller' : this.shortId(tid)}
+                          &middot; ${msgCount} message${msgCount !== 1 ? 's' : ''} &middot; ${this.fmtTime(o.updated_at)}
+                        </div>
                       </div>
                     </div>
                     <span class="badge badge-${o.status.replace('escrow-','')}">${o.status}${o.status === 'accepted' && o.has_invoice ? ' (invoiced)' : ''}</span>
@@ -761,7 +829,7 @@ const App = {
                   ` : ''}
                   ${(o.messages && o.messages.length) ? `
                     <div class="thread-messages" style="margin-top: 12px;">
-                      ${o.messages.map(m => this.renderMessage(m, myNymIds)).join('')}
+                      ${o.messages.slice(-8).map(m => this.renderMessage(m, myNymIds)).join('')}
                     </div>
                   ` : ''}
                   ${o.escrow ? `
@@ -802,8 +870,9 @@ const App = {
                       ${wait}
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                      ${['paid','escrowed','fulfilled','completed'].includes(o.status) ? `<button class="btn btn-sm btn-ghost" data-action="verify-payment" data-thread-id="${o.thread_id || o.id}">Verify on Zenith</button>` : ''}
+                      ${['paid','escrowed','fulfilled','completed'].includes(o.status) && !(o.escrow && ['released','refunded','confirmed'].includes(o.escrow.status)) ? `<button class="btn btn-sm btn-ghost" data-action="verify-payment" data-thread-id="${tid}">Verify on Zenith</button>` : ''}
                       ${btn}
+                      <button class="btn btn-sm btn-ghost" data-action="open-send-reply" data-thread-id="${tid}">Reply</button>
                     </div>
                   </div>
                 </div>
@@ -1041,6 +1110,38 @@ const App = {
           <div class="stat-card">
             <div class="stat-label">Retries</div>
             <div class="stat-value">${sk.pendingRetries || 0}</div>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-bottom: 16px;">
+          <div class="table-header">
+            <div class="table-title">Transport Architecture</div>
+          </div>
+          <div style="padding: 16px 20px;">
+            <div class="mini-stat-row">
+              <span class="mini-label">Header Crypto</span>
+              <span>X25519 DH + AES-SIV per hop</span>
+            </div>
+            <div class="mini-stat-row">
+              <span class="mini-label">Body Crypto</span>
+              <span>Onion-wrapped (${sk.relays || 0} layer${(sk.relays||0)!==1?'s':''})</span>
+            </div>
+            <div class="mini-stat-row">
+              <span class="mini-label">Cell ID</span>
+              <span>Randomized per hop</span>
+            </div>
+            <div class="mini-stat-row">
+              <span class="mini-label">Contact Model</span>
+              <span>Opaque bundles (reply-block routed)</span>
+            </div>
+            <div class="mini-stat-row">
+              <span class="mini-label">Message Auth</span>
+              <span>Ed25519 silk-packet signatures</span>
+            </div>
+            <div class="mini-stat-row">
+              <span class="mini-label">Bundle Rotation</span>
+              <span>Every 12h (per-nym)</span>
+            </div>
           </div>
         </div>
 
@@ -1871,13 +1972,8 @@ const App = {
             this.action(() => SilkAPI.fileDispute(tid, reason, nym));
             break;
           }
-          case 'threads-prev':
-            this.state.threadsPage = Math.max(0, (this.state.threadsPage || 0) - 1);
-            this.render();
-            break;
-          case 'threads-next':
-            this.state.threadsPage = (this.state.threadsPage || 0) + 1;
-            this.render();
+          case 'toggle-collapse':
+            this.toggleOrderCollapse(el.dataset.tid);
             break;
           case 'orders-prev':
             this.state.ordersPage = Math.max(0, (this.state.ordersPage || 0) - 1);
@@ -1902,6 +1998,16 @@ const App = {
         if (manual) manual.style.display = walletSel.value === '__manual__' ? '' : 'none';
       });
     }
+  },
+
+  privacyCheck(label, ok, desc) {
+    return `
+      <div class="priv-check">
+        <span class="priv-dot ${ok ? 'priv-on' : 'priv-off'}">${ok ? '\u2713' : '\u2717'}</span>
+        <span class="priv-label">${label}</span>
+        <span class="priv-desc">${desc}</span>
+      </div>
+    `;
   },
 
   esc(str) {

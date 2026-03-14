@@ -69,7 +69,7 @@
       [%sync-thread-response =silk-thread]
       ::  marketplace gossip
       [%catalog-request from-ship=@p]
-      [%catalog listings=(list listing) routes=(list nym-route)]
+      [%catalog listings=(list listing) contacts=(list nym-contact)]
       [%listing-retracted id=listing-id]
       ::  moderator gossip
       [%moderator-profile =moderator-profile]
@@ -334,10 +334,27 @@
 ::
 ::  destination: how to reach a pseudonym over skein
 ::
++$  nym-contact
+  $:  =nym-id
+      contact=@ux             ::  opaque skein contact-bundle
+  ==
+::
+::  silk-envelope: transport wrapper carrying reply material
+::  every outbound message includes fresh reply contact-bundle
+::  so the receiver can reply without stable contact storage
+::
++$  silk-packet
+  $:  sender=nym-id           ::  market pseudonym of sender
+      sig=@ux                 ::  ed25519 signature of (jam body)
+      reply=(unit @ux)        ::  fresh reply contact-bundle
+      body=silk-message
+  ==
+::
+::  DEPRECATED: kept for state migration only
 +$  nym-route
   $:  =nym-id
-      target-ship=@p          ::  skein endpoint ship
-      target-app=@tas          ::  skein endpoint app (always %silk-core)
+      target-ship=@p
+      target-app=@tas
   ==
 ::
 ::  rep commands
