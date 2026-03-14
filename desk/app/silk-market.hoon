@@ -91,6 +91,8 @@
       [%resolve-escrow thread-id=@uv =escrow-status]
       [%resolve-dispute thread-id=@uv ruling=ruling-kind]
       [%cancel-stale threshold=@dr]
+      ::  WS3: proposal-based advance — returns approved/rejected
+      [%propose-advance thread-id=@uv to=order-status]
   ==
 ::
 +$  market-event
@@ -103,6 +105,9 @@
       [%dispute-resolved thread-id=@uv ruling=ruling-kind]
       [%stale-cancelled count=@ud]
       [%invalid-transition thread-id=@uv from=order-status to=order-status]
+      ::  WS3: proposal responses
+      [%proposal-approved thread-id=@uv to=order-status]
+      [%proposal-rejected thread-id=@uv to=order-status reason=@t]
   ==
 ::
 +$  state-1
@@ -288,6 +293,24 @@
           ==
       this
     ::
+        %propose-advance
+      ::  WS3: validate transition without mutating — return approved/rejected
+      =/  ord=(unit order)  (~(get by orders.state) thread-id.cmd)
+      ?~  ord
+        ::  no order yet — approve (silk-core will create on first offer)
+        :-  [(event-card [%proposal-approved thread-id.cmd to.cmd])]~
+        this
+      ?:  =(order-status.u.ord to.cmd)
+        ::  already at target — approve (idempotent)
+        :-  [(event-card [%proposal-approved thread-id.cmd to.cmd])]~
+        this
+      ?.  (valid-transition order-status.u.ord to.cmd)
+        :-  :~  (event-card [%proposal-rejected thread-id.cmd to.cmd 'invalid transition'])
+            ==
+        this
+      :-  [(event-card [%proposal-approved thread-id.cmd to.cmd])]~
+      this
+    ::
         %cancel-stale
       ::  cancel orders stuck in non-terminal states past threshold
       =/  cutoff=@da  (sub now.bowl threshold.cmd)
@@ -330,6 +353,23 @@
           listings=~(wyt by listings.state)
       ==
     ``noun+!>(s)
+  ::
+  ::  WS3: check if a transition is valid without mutating
+  ::  returns %.y if the advance would be approved
+      [%x %check-advance @ @ ~]
+    =/  tid=@uv  (slav %uv i.t.t.path)
+    =/  to-raw=@tas  (slav %tas i.t.t.t.path)
+    ::  try to parse as order-status; if unknown, approve (allow silk-core to decide)
+    =/  to-try  (mule |.(;;(order-status to-raw)))
+    ?:  ?=(%| -.to-try)
+      ``noun+!>(%.y)
+    =/  to=order-status  p.to-try
+    =/  ord=(unit order)  (~(get by orders.state) tid)
+    ?~  ord
+      ``noun+!>(%.y)  ::  no order yet — always approve
+    ?:  =(order-status.u.ord to)
+      ``noun+!>(%.y)  ::  idempotent
+    ``noun+!>((valid-transition order-status.u.ord to))
   ==
 ::
 ++  on-watch
@@ -346,6 +386,9 @@
   ^-  (quip card _this)
   ?+  wire  (on-agent:def wire sign)
       [%rep *]
+    `this
+  ::
+      [%market *]
     `this
   ==
 ++  on-arvo   on-arvo:def

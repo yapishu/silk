@@ -67,10 +67,12 @@
       ::  thread reconciliation
       [%sync-thread thread-id=@uv chain=@ux msg-count=@ud]
       [%sync-thread-response =silk-thread]
-      ::  marketplace gossip
-      [%catalog-request from-ship=@p]
+      ::  marketplace gossip — WS2: contact-first catalog sync
+      [%catalog-request request-id=@uv reply-contact=@ux]
       [%catalog listings=(list listing) contacts=(list nym-contact)]
       [%listing-retracted id=listing-id]
+      ::  signed nym introduction — WS2/WS6: trust bootstrap
+      [%nym-intro =nym-id pubkey=@ux contact=@ux sig=@ux]
       ::  moderator gossip
       [%moderator-profile =moderator-profile]
       [%moderator-retracted id=moderator-id]
@@ -386,5 +388,16 @@
       [%revoked id=attest-id]
       [%imported =attestation]
       [%score-updated subject=nym-id score=@ud]
+  ==
+::
+::  WS3: market proposal types for silk-core -> silk-market approval flow
+::
++$  market-proposal
+  $%  [%propose-advance =thread-id to=@tas]
+  ==
+::
++$  market-response
+  $%  [%approved =thread-id to=@tas]
+      [%rejected =thread-id to=@tas reason=@t]
   ==
 --

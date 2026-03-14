@@ -27,6 +27,27 @@
       sig=@ux                    ::  Ed25519 signature by relay's own seed
   ==
 ::
+::  workstream 1: local relay metadata for provenance-aware routing
+::
++$  relay-status  ?(%provisional %usable %trusted)
++$  relay-meta
+  $:  sources=(set ship)
+      first-seen=@da
+      last-seen=@da
+      status=relay-status
+  ==
+::
+::  workstream 3: fixed transport profiles for size-shaping
+::
++$  cell-profile  ?(%small %medium %large)
+::
+::  workstream 4: route-set for resilient retries
+::
++$  route-set
+  $:  primary=route
+      alternates=(list route)
+  ==
+::
 +$  route-hop
   $:  ship=@p
       relay=relay-id
@@ -104,6 +125,7 @@
       header=header-box
       body=payload-box
       expiry=(unit @da)
+      profile=cell-profile
   ==
 ::
 ::  replay detection by cell-id only
