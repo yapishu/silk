@@ -1,5 +1,7 @@
 # %silk
 
+![](https://pub-5eef062339ec4a0a8839cb95ec1a98a6.r2.dev/silk.png)
+
 `%silk` is a marketplace protocol for Urbit built on top of `%skein`.
 
 Its job is to let people discover listings, negotiate, buy, sell, dispute, and build reputation through pseudonymous market identities rather than ordinary ship-to-ship application messaging. `%skein` handles routed delivery, `%silk` defines what the marketplace messages mean, and Zenith provides the settlement rail.
