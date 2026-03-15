@@ -35,6 +35,7 @@
       first-seen=@da
       last-seen=@da
       status=relay-status
+      family=(unit @t)           ::  ws3: operator family label
   ==
 ::
 ::  workstream 3: fixed transport profiles for size-shaping
@@ -76,10 +77,28 @@
       expiry=(unit @da)
   ==
 ::
+::  ws1: introduction bundle — batch of single-use ingress entries
+::
++$  intro-entry
+  $:  token=reply-token
+      first-hop=ship
+      header=header-box
+      rngs=(list @ux)
+      expiry=(unit @da)
+  ==
+::
++$  intro-bundle
+  $:  app=app-id
+      bundle-id=@ux
+      entries=(list intro-entry)
+      reply-policy=(unit ?)
+  ==
+::
 +$  send-options
   $:  route=(unit route)
       reply-blocks=(list reply-block)
       ttl=(unit @dr)
+      profile=(unit cell-profile)   ::  ws4: caller profile override
   ==
 ::
 +$  send-request
@@ -107,6 +126,7 @@
       [%mint-contact app=app-id label=@uv]
       [%trust-relay relay=relay-id]
       [%untrust-relay relay=relay-id]
+      [%set-relay-family relay=relay-id family=@t]  ::  ws3: assign family
   ==
 ::
 +$  envelope
@@ -157,6 +177,7 @@
       [%relay-untrusted relay=relay-id]
       [%relay-expired relay=relay-id]
       [%contact-minted app=app-id label=@uv]
+      [%bundle-exhausted bundle-id=@ux]
   ==
 ::
 +$  app-view

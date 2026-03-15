@@ -44,6 +44,17 @@
       %general          ::  general reputation signal
   ==
 ::
+::  WS4: first-class evidence for disputes
+::
++$  evidence
+  $:  id=@uv
+      =thread-id
+      author=nym-id
+      hash=@ux            ::  content hash
+      note=@t
+      submitted-at=@da
+  ==
+::
 ::  protocol message types
 ::
 ::  these are the application-layer messages that %silk
@@ -67,12 +78,17 @@
       ::  thread reconciliation
       [%sync-thread thread-id=@uv chain=@ux msg-count=@ud]
       [%sync-thread-response =silk-thread]
+      ::  WS3: sender-aware sync deltas
+      [%sync-thread-delta thread-id=@uv deltas=(list sync-delta)]
       ::  marketplace gossip — WS2: contact-first catalog sync
       [%catalog-request request-id=@uv reply-contact=@ux]
       [%catalog listings=(list listing) contacts=(list nym-contact)]
       [%listing-retracted id=listing-id]
       ::  signed nym introduction — WS2/WS6: trust bootstrap
-      [%nym-intro =nym-id pubkey=@ux contact=@ux sig=@ux]
+      ::  seq: monotonic intro sequence for rotation tracking
+      [%nym-intro =nym-id pubkey=@ux contact=@ux sig=@ux seq=@ud]
+      ::  WS2: moderator identity introduction
+      [%moderator-intro =moderator-id =nym-id pubkey=@ux contact=@ux sig=@ux]
       ::  moderator gossip
       [%moderator-profile =moderator-profile]
       [%moderator-retracted id=moderator-id]
@@ -86,6 +102,8 @@
       [%escrow-notify =escrow-notify-data buyer=nym-id seller=nym-id]
       [%escrow-dispute thread-id=@uv =dispute]
       [%escrow-assembled thread-id=@uv result=escrow-st tx-hex=@t]
+      ::  WS4: evidence submission
+      [%evidence =evidence]
   ==
 ::
 ::  moderator: trusted marketplace dispute resolver
@@ -239,12 +257,17 @@
       filed-at=@da
   ==
 ::
+::  WS4: extended verdict with split amounts
+::
 +$  verdict
   $:  dispute-id=dispute-id
       thread-id=@uv
       ruling=ruling-kind
       note=@t
       ruled-at=@da
+      buyer-share=@ud       ::  WS4: buyer payout (used for %split)
+      seller-share=@ud      ::  WS4: seller payout
+      moderator-share=@ud   ::  WS4: moderator payout
   ==
 ::
 +$  ruling-kind
@@ -311,6 +334,7 @@
       ::  disputes
       [%file-dispute =dispute]
       [%submit-verdict =verdict]
+      [%submit-evidence =evidence]
       ::  moderators
       [%register-moderator =moderator-profile]
       [%retract-moderator id=moderator-id]
@@ -348,6 +372,7 @@
       [%escrow-refunded thread-id=@uv]
       [%escrow-assembled thread-id=@uv result=escrow-st]
       [%escrow-confirmed thread-id=@uv]
+      [%evidence-submitted =evidence]
   ==
 ::
 ::  destination: how to reach a pseudonym over skein
@@ -368,12 +393,6 @@
       body=silk-message
   ==
 ::
-::  DEPRECATED: kept for state migration only
-+$  nym-route
-  $:  =nym-id
-      target-ship=@p
-      target-app=@tas
-  ==
 ::
 ::  rep commands
 ::
@@ -390,14 +409,74 @@
       [%score-updated subject=nym-id score=@ud]
   ==
 ::
-::  WS3: market proposal types for silk-core -> silk-market approval flow
+::  WS1: market command types for proposal-based approval flow
 ::
 +$  market-proposal
-  $%  [%propose-advance =thread-id to=@tas]
+  $%  [%propose-create =thread-id listing-id=listing-id buyer=nym-id seller=nym-id offer-id=offer-id amount=@ud currency=@tas]
+      [%propose-advance =thread-id to=@tas]
+      [%propose-escrow =thread-id to=@tas]
+      [%propose-resolution =thread-id ruling=ruling-kind]
   ==
 ::
 +$  market-response
-  $%  [%approved =thread-id to=@tas]
-      [%rejected =thread-id to=@tas reason=@t]
+  $%  [%proposal-approved proposal-id=@uv =thread-id to=@tas]
+      [%proposal-rejected proposal-id=@uv =thread-id to=@tas reason=@t]
+  ==
+::
+::  WS1: pending proposal buffer for silk-core
+::  carries everything needed to commit on approval
+::
++$  pending-proposal
+  $:  proposal-id=@uv
+      staged-thread=[tid=@uv thd=silk-thread]
+      outbound-cards=(list card:agent:gall)
+      event-cards=(list card:agent:gall)
+      actor=nym-id
+      ::  staged side-effect mutations (applied only on approval)
+      staged-pending-acks=(list [@ux pending-msg-entry])
+      staged-inventory=(list [listing-id @ud])
+      staged-escrow-status=(list [@uv escrow-st])
+      staged-escrow-sigs=(list [@uv (map @ud @ux)])
+      staged-escrow-keys=(list [@uv @ux])
+  ==
+::
+::  pending-msg-entry: ack tracking for staged proposals
+::  (matches pending-msg shape but decoupled from state type)
+::
++$  pending-msg-entry
+  $:  msg-hash=@ux
+      thread-id=@uv
+      target=@ux
+      msg=silk-message
+      sent-at=@da
+      attempts=@ud
+      sender=nym-id
+  ==
+::
+::  WS2: pending moderator delivery with preserved actor
+::
++$  pending-mod-delivery
+  $:  mod-id=moderator-id
+      actor=nym-id
+      msg=silk-message
+  ==
+::
+::  WS3: sender-aware sync delta with cryptographic provenance
+::
++$  sync-delta
+  $:  sender=nym-id
+      sig=@ux               ::  ed25519 signature of (jam msg) by sender
+      msg=silk-message
+      msg-id=@ux
+  ==
+::
+::  WS3: zenith account type for the stable adapter contract
+::
++$  zenith-account
+  $:  address=@t
+      pubkey=@ux
+      privkey=@ux
+      acc-num=@ud
+      seq-num=@ud
   ==
 --

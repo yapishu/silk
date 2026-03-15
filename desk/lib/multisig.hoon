@@ -341,4 +341,113 @@
         [3 repeated+bytes+~[[`msb multi-sig-bytes]]]
     ==
   (encode-message tx-raw)
+::
+::  WS5: build multi-MsgSend tx body for split settlement
+::
+::  sends from the multisig address to multiple recipients
+::  in a single transaction (one MsgSend per output)
+::
+++  mk-tx-body-multi-send
+  |=  [from=@t outputs=(list [to=@t amount=@ud denom=@t])]
+  ^-  message-bare
+  =/  msgs=(list message-bare)
+    %+  turn  outputs
+    |=  [to=@t amount=@ud denom=@t]
+    (mk-any (need url:msg-send) (mk-msg-send from to denom amount))
+  (mk-message-bare [1 repeated+embedded+msgs]~)
+::
+::  WS5: amino JSON SignDoc for split settlement (multi-output)
+::
+::  canonical amino JSON with multiple MsgSend messages sorted
+::  each signer hashes+signs this exact byte sequence
+::
+++  amino-json-sign-doc-multi-send
+  |=  $:  from=@t
+          outputs=(list [to=@t amount=@ud denom=@t])
+          fee=@ud
+          gas=@ud
+          chain-id=@t
+          account-number=@ud
+          sequence=@ud
+      ==
+  ^-  @t
+  =/  fee-s=@t  (ud-to-cord fee)
+  =/  gas-s=@t  (ud-to-cord gas)
+  =/  acc-s=@t  (ud-to-cord account-number)
+  =/  seq-s=@t  (ud-to-cord sequence)
+  ::  build msgs array
+  =/  msgs-cord=@t
+    =/  parts=(list @t)
+      %+  turn  outputs
+      |=  [to=@t amount=@ud denom=@t]
+      =/  amt-s=@t  (ud-to-cord amount)
+      %+  rap  3
+      :~  '{"type":"cosmos-sdk/MsgSend","value":{"amount":[{"amount":"'
+          amt-s
+          '","denom":"'  denom
+          '"}],"from_address":"'  from
+          '","to_address":"'  to
+          '"}}'
+      ==
+    ::  join parts with commas
+    =/  joined=@t  ''
+    =/  idx=@ud  0
+    |-
+    ?~  parts  joined
+    =/  sep=@t  ?:(=(idx 0) '' ',')
+    $(parts t.parts, idx +(idx), joined (rap 3 ~[joined sep i.parts]))
+  ::  use first output denom for fee
+  =/  fee-denom=@t  denom:(snag 0 outputs)
+  %+  rap  3
+  :~  '{"account_number":"'  acc-s
+      '","chain_id":"'  chain-id
+      '","fee":{"amount":[{"amount":"'  fee-s
+      '","denom":"'  fee-denom
+      '"}],"gas":"'  gas-s
+      '"},"memo":"","msgs":['  msgs-cord
+      '],"sequence":"'  seq-s
+      '"}'
+  ==
+::
+::  WS5: assemble split settlement multisig tx
+::
+::  like assemble-multisig-tx but with multiple MsgSend outputs
+::
+++  assemble-split-tx
+  |=  $:  from=@t               ::  multisig address
+          outputs=(list [to=@t amount=@ud denom=@t])
+          fee=@ud               ::  fee amount
+          gas=@ud               ::  gas limit
+          chain-id=@t
+          account-number=@ud
+          sequence=@ud
+          pubkeys=(list @ux)    ::  all 3 sorted pubkeys
+          signer-indices=(list @ud)
+          signatures=(list @ux)
+      ==
+  ^-  @t  ::  hex-encoded tx bytes
+  ::  build TxBody with multiple MsgSend
+  =/  body-bytes=@ux
+    (to-bytes (encode-message (mk-tx-body-multi-send from outputs)))
+  ::  build AuthInfo with multisig structure (same as single-output)
+  =/  auth-info-bytes=@ux
+    %-  to-bytes
+    %-  encode-message
+    ::  use first output denom for fee
+    =/  fee-denom=@t  denom:(snag 0 outputs)
+    (mk-auth-info-multisig (sort-pubkeys pubkeys) signer-indices sequence fee-denom fee gas)
+  ::  build MultiSignature protobuf
+  =/  multi-sig=message-bare
+    %-  mk-message-bare
+    :~  [1 repeated+bytes+(turn signatures |=(s=@ux [`64 s]))]
+    ==
+  =/  multi-sig-bytes=@ux  (to-bytes (encode-message multi-sig))
+  =/  msb=@ud  (met 3 multi-sig-bytes)
+  =/  tx-raw=message-bare
+    %-  mk-message-bare
+    :~  [1 bytes+`body-bytes]
+        [2 bytes+`auth-info-bytes]
+        [3 repeated+bytes+~[[`msb multi-sig-bytes]]]
+    ==
+  (encode-message tx-raw)
 --
