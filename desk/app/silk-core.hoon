@@ -90,7 +90,7 @@
     :*  skein-app
         [%contact contact]
         (jam pkt)
-        [~ ~ ~]
+        [~ ~ ~ ~]
     ==
   [%pass /silk/send %agent [our %skein] %poke %skein-send !>(req)]
 ::
@@ -106,7 +106,7 @@
     :*  skein-app
         [%endpoint [target-ship %silk-core]]
         (jam pkt)
-        [~ ~ ~]
+        [~ ~ ~ ~]
     ==
   [%pass /silk/gossip %agent [our %skein] %poke %skein-send !>(req)]
 ::
@@ -229,33 +229,38 @@
   ^-  (list card)
   =/  relay-result
     (mule |.(.^(* %gx /(scot %p our)/skein/(scot %da now)/descriptors/noun)))
-  ?:  ?=(%| -.relay-result)  ~
-  ::  extract ship set from raw descriptor list
+  ?:  ?=(%| -.relay-result)
+    ~&  [%silk-discover %scry-failed]
+    ~
+  ::  extract ships from descriptor list
+  =/  raw-descriptors  p.relay-result
+  ~&  [%silk-discover %raw-type ?=(^ raw-descriptors)]
   =/  ships=(set @p)
-    =/  raw  p.relay-result
+    =/  raw  raw-descriptors
     =/  acc=(set @p)  ~
     |-
-    ?@  raw  acc
-    ?@  -.raw  $(raw +.raw)
-    ::  each descriptor is [relay ship pub weight ...]
-    ::  ship is at +<
-    =/  try  (mule |.(;;(@p +<.-.raw)))
+    ?~  raw  acc
+    =/  item  -.raw
+    =/  try  (mule |.(;;(@p +<.item)))
+    ~&  [%silk-discover %try-ship ?=(%& -.try) ?:(?=(%& -.try) (scot %p p.try) 'fail')]
     =?  acc  ?=(%& -.try)  (~(put in acc) p.try)
     $(raw +.raw)
+  ~&  [%silk-discover %found-ships ~(wyt in ships) %already-peers ~(wyt in peers)]
   =/  new-ships=(list @p)
     %+  murn  ~(tap in ships)
     |=  s=@p
     ?:  =(s our)  ~
     ?:  (~(has in peers) s)  ~
     `s
-  ::  WS2: catalog-request now uses request-id + reply-contact
-  =/  dn=nym-id  (default-nym nyms)
-  =/  reply-bundle=(unit @ux)  (~(get by bundles) dn)
-  ?~  reply-bundle  ~
+  ?~  new-ships  ~
+  ~&  [%silk-discover %probing (lent new-ships) %new-ships]
+  ::  peer discovery sends raw pokes to skein (endpoint routing)
+  ::  this bypasses silk-packet signing so it works without nyms
   %+  turn  new-ships
   |=  s=@p
-  =/  rid=@uv  (sham [our now s])
-  (gossip-card our s reply-bundle dn keys [%catalog-request rid u.reply-bundle])
+  ^-  card
+  =/  catalog-req=silk-message  [%catalog-request (sham [our now s]) 0x0]
+  [%pass /silk/discover/[(scot %p s)] %agent [our %skein] %poke %skein-send !>([skein-app [%endpoint [s %silk-core]] (jam catalog-req) [~ ~ ~ ~]])]
 ::
 ::  Fix 2: mint contact bundle for a single nym
 ::
@@ -597,9 +602,22 @@
           ~&  [%silk-core %sig-verify-failed sender.pkt]
           ~
         `[`sender.pkt reply.pkt body.pkt]
-      ::  no fallback: unsigned messages are rejected
-      ~&  [%silk-core %unsigned-payload-dropped]
-      ~
+      ::  limited fallback: only catalog-request and catalog are accepted unsigned
+      ::  these are gossip/discovery messages, not market-state-changing
+      =/  msg-try  (mule |.((silk-message cued)))
+      ?:  ?=(%| -.msg-try)
+        ~&  [%silk-core %unsigned-payload-dropped]
+        ~
+      ?.  ?|  ?=(%catalog-request -.p.msg-try)
+              ?=(%catalog -.p.msg-try)
+              ?=(%nym-intro -.p.msg-try)
+              ?=(%moderator-intro -.p.msg-try)
+              ?=(%moderator-profile -.p.msg-try)
+              ?=(%listing-retracted -.p.msg-try)
+          ==
+        ~&  [%silk-core %unsigned-non-gossip-dropped -.p.msg-try]
+        ~
+      `[~ ~ p.msg-try]
     ?~  parsed
       ~&  [%silk-core %noun-parse-fail]
       `this
@@ -615,9 +633,10 @@
       :-  [(event-card [%listing-posted +.msg])]~
       this
     ?:  ?=(%catalog-request -.msg)
-      ::  WS2: contact-first catalog sync — reply via contact bundle, not ship
       =/  reply-bundle=@ux  reply-contact.msg
-      ~&  [%silk-gossip %catalog-request-received request-id.msg]
+      ~&  [%silk-gossip %catalog-request-received request-id.msg %from src.bowl]
+      ::  auto-add requester as peer (they're running silk)
+      =.  peers.state  (~(put in peers.state) src.bowl)
       =/  our-listings=(list listing)  ~(val by listings.state)
       =/  our-contacts=(list nym-contact)
         %+  murn  ~(val by nyms.state)
@@ -625,10 +644,14 @@
         =/  bundle  (~(get by our-bundles.state) id.n)
         ?~  bundle  ~
         `[id.n u.bundle]
-      ~&  [%silk-gossip %sending-catalog (lent our-listings) %listings-via-contact]
+      ~&  [%silk-gossip %sending-catalog (lent our-listings) %listings %to src.bowl]
       =/  dn=nym-id  (default-nym nyms.state)
+      ::  reply via contact if available, otherwise fall back to raw endpoint routing
+      =/  catalog-msg=silk-message  [%catalog our-listings our-contacts]
       =/  catalog-card=card
-        (skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) dn) dn keys.state [%catalog our-listings our-contacts])
+        ?:  =(0x0 reply-bundle)
+          [%pass /silk/catalog-reply/[(scot %p src.bowl)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [src.bowl %silk-core]] (jam catalog-msg) [~ ~ ~ ~]])]
+        (skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) dn) dn keys.state catalog-msg)
       ::  send nym-intros for all our nyms alongside catalog
       =/  intro-cards=(list card)
         %+  murn  ~(val by nyms.state)
@@ -637,17 +660,27 @@
         ?~  kp  ~
         =/  bundle=(unit @ux)  (~(get by our-bundles.state) id.n)
         ?~  bundle  ~
-        ::  WS2: include monotonic seq for rotation tracking
         =/  seq=@ud  +((~(gut by nym-intro-seqs.state) id.n 0))
         =/  intro-msg=@  (jam [%nym-intro id.n pub.u.kp u.bundle seq])
         =/  intro-sig=@ux  (sign:ed:crypto intro-msg sec.u.kp)
-        `(skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) id.n) id.n keys.state [%nym-intro id.n pub.u.kp u.bundle intro-sig seq])
+        =/  intro-silk=silk-message  [%nym-intro id.n pub.u.kp u.bundle intro-sig seq]
+        ?:  =(0x0 reply-bundle)
+          `[%pass /silk/intro-reply/[(scot %uv id.n)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [src.bowl %silk-core]] (jam intro-silk) [~ ~ ~ ~]])]
+        `(skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) id.n) id.n keys.state intro-silk)
       =/  mod-cards=(list card)
         %+  turn  ~(val by moderators.state)
-        |=(mp=moderator-profile (skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) dn) dn keys.state [%moderator-profile mp]))
+        |=  mp=moderator-profile
+        ^-  card
+        =/  mod-msg=silk-message  [%moderator-profile mp]
+        ?:  =(0x0 reply-bundle)
+          [%pass /silk/mod-reply/[(scot %uv id.mp)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [src.bowl %silk-core]] (jam mod-msg) [~ ~ ~ ~]])]
+        (skein-send-card our.bowl reply-bundle (~(get by our-bundles.state) dn) dn keys.state mod-msg)
       :_  this
       ;:(weld [catalog-card]~ intro-cards mod-cards)
     ?:  ?=(%catalog -.msg)
+      ::  auto-add catalog sender as peer
+      =/  was-peer=?  (~(has in peers.state) src.bowl)
+      =.  peers.state  (~(put in peers.state) src.bowl)
       =/  new-count=@ud  0
       =.  listings.state
         =/  lsts=(list listing)  listings.msg
@@ -662,8 +695,23 @@
         |-
         ?~  cts  contacts.state
         $(cts t.cts, contacts.state (~(put by contacts.state) nym-id.i.cts contact.i.cts))
-      ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent contacts.msg) %contacts]
-      :-  [(event-card [%catalog-received (lent listings.msg)])]~
+      ~&  [%silk-gossip %catalog-received (lent listings.msg) %listings (lent contacts.msg) %contacts %from src.bowl %new-peer !was-peer]
+      ::  if this is a new peer, send our catalog back so the exchange is bidirectional
+      =/  reply-cards=(list card)
+        ?:  was-peer  ~
+        =/  dn=nym-id  (default-nym nyms.state)
+        =/  our-listings=(list listing)  ~(val by listings.state)
+        =/  our-contacts=(list nym-contact)
+          %+  murn  ~(val by nyms.state)
+          |=  n=pseudonym
+          =/  bundle  (~(get by our-bundles.state) id.n)
+          ?~  bundle  ~
+          `[id.n u.bundle]
+        ~&  [%silk-gossip %sending-catalog-back-to src.bowl]
+        =/  back-msg=silk-message  [%catalog our-listings our-contacts]
+        :~  [%pass /silk/catalog-back/[(scot %p src.bowl)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [src.bowl %silk-core]] (jam back-msg) [~ ~ ~ ~]])]
+        ==
+      :-  (weld [(event-card [%catalog-received (lent listings.msg)])]~ reply-cards)
       this
     ::  non-thread messages
     ?:  ?=(%attest -.msg)
@@ -2531,16 +2579,16 @@
         ?~  bundle  ~
         `[id.n u.bundle]
       ~&  [%silk-gossip %add-peer ship.cmd %sending (lent our-listings) %listings]
-      ::  WS2: catalog-request now uses request-id + reply-contact
       =/  dn=nym-id  (default-nym nyms.state)
-      =/  reply-bundle=(unit @ux)  (~(get by our-bundles.state) dn)
+      =/  rb=@ux  (~(gut by our-bundles.state) dn 0x0)
       =/  rid=@uv  (sham [our.bowl now.bowl ship.cmd])
+      ::  send catalog + catalog-request via raw skein endpoint (works without signing)
+      =/  catalog-msg=silk-message  [%catalog our-listings our-contacts]
+      =/  req-msg=silk-message  [%catalog-request rid rb]
       :_  this
       :~  (event-card [%peer-added ship.cmd])
-          (gossip-card our.bowl ship.cmd reply-bundle dn keys.state [%catalog our-listings our-contacts])
-          ?~  reply-bundle
-            (gossip-card our.bowl ship.cmd ~ dn keys.state [%catalog-request rid 0x0])
-          (gossip-card our.bowl ship.cmd reply-bundle dn keys.state [%catalog-request rid u.reply-bundle])
+          [%pass /silk/peer/catalog/[(scot %p ship.cmd)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [ship.cmd %silk-core]] (jam catalog-msg) [~ ~ ~ ~]])]
+          [%pass /silk/peer/request/[(scot %p ship.cmd)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [ship.cmd %silk-core]] (jam req-msg) [~ ~ ~ ~]])]
       ==
     ::
         %drop-peer
@@ -2550,17 +2598,17 @@
     ::
         %sync-catalog
       ~&  [%silk-sync %peer-count ~(wyt in peers.state) %peers ~(tap in peers.state)]
-      ::  WS2: catalog-request now carries request-id + reply-contact
       =/  dn=nym-id  (default-nym nyms.state)
       =/  reply-bundle=(unit @ux)  (~(get by our-bundles.state) dn)
-      ?~  reply-bundle
-        ~&  [%silk-sync %no-bundle-for-catalog-request]
-        `this
+      ::  send catalog-request to each peer — use endpoint routing (works without bundles)
       :_  this
       %+  turn  ~(tap in peers.state)
       |=  p=@p
+      ^-  card
       =/  rid=@uv  (sham [our.bowl now.bowl p])
-      (gossip-card our.bowl p reply-bundle dn keys.state [%catalog-request rid u.reply-bundle])
+      =/  rb=@ux  ?~(reply-bundle 0x0 u.reply-bundle)
+      =/  catalog-req=silk-message  [%catalog-request rid rb]
+      [%pass /silk/sync/[(scot %p p)] %agent [our.bowl %skein] %poke %skein-send !>([skein-app [%endpoint [p %silk-core]] (jam catalog-req) [~ ~ ~ ~]])]
     ::
         %send-offer
       =/  o=offer  offer.cmd
@@ -3921,9 +3969,10 @@
   ::
       [%silk %discover-peers ~]
     ::  probe skein relays for new silk peers, re-arm timer
+    ~&  [%silk-core %discover-peers-tick %peers ~(wyt in peers.state)]
     =/  probe-cards=(list card)
       (discover-peers-cards our.bowl now.bowl peers.state nyms.state keys.state our-bundles.state)
-    ~?  (gth (lent probe-cards) 0)  [%silk-core %discover-peers %probing (lent probe-cards) %ships]
+    ~&  [%silk-core %discover-peers %probes (lent probe-cards)]
     :_  this
     :_  probe-cards
     [%pass /silk/discover-peers %arvo %b %wait (add now.bowl ~m5)]
